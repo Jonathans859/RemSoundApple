@@ -107,7 +107,10 @@ final class SessionPlayout {
 
         // Click-trim: buffer crept past target + margin (burst arrival or sender clock
         // running fast). Trim back to target; the seam gets a fade-in on the next read.
-        let margin = max(largestWriteFrames * 2, targetFrames / 2)
+        // Margin must clear the natural packet-arrival sawtooth (2 codec frames) but no
+        // more — a stall's late-packet refill otherwise parks the buffer permanently above
+        // target, adding latency the user never asked for. Floor at 10 ms.
+        let margin = max(largestWriteFrames * 2, Self.mixSampleRate / 100)
         if armed && count > targetFrames + margin {
             dropOldestLocked(frames: count - targetFrames)
             trimFireCount += 1

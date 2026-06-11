@@ -32,6 +32,9 @@ public final class ReceiverController {
     public private(set) var statusSummary = "Stopped"
     public private(set) var isRunning = false
     public private(set) var lastError: String?
+    /// Windows-style connection details ("Connected to 1 peer", per-peer ping, uptime,
+    /// rates, totals, buffer/output latency), refreshed once a second.
+    public private(set) var connectionDetails: [String] = []
 
     public var volume: Float {
         didSet {
@@ -81,6 +84,11 @@ public final class ReceiverController {
     /// Addresses currently delivering audio — drives connect/disconnect cues.
     private var audibleAddresses: Set<UInt32> = []
     private var refreshTask: Task<Void, Never>?
+
+    // Previous traffic-counter snapshot for the per-second rate lines.
+    private var lastBytesReceived: Int64 = 0
+    private var lastBytesSent: Int64 = 0
+    private var lastRateDate = Date()
 
     public init() {
         manualPeers = settings.manualPeers
@@ -149,6 +157,7 @@ public final class ReceiverController {
         isRunning = false
         audibleAddresses = []
         statusSummary = "Stopped"
+        connectionDetails = []
         refreshPeerList()
     }
 
@@ -259,11 +268,66 @@ public final class ReceiverController {
     private func refreshNow() {
         guard isRunning else {
             refreshPeerList()
+            connectionDetails = []
             return
         }
         updateCues()
         refreshPeerList()
         updateSummary()
+        updateConnectionDetails()
+    }
+
+    private func updateConnectionDetails() {
+        var lines: [String] = []
+
+        // Connected = selected peers whose heartbeat is currently healthy, like Windows.
+        let health = heartbeat.allPeerHealth()
+        let healthy = health.filter { $0.state == .healthy }
+        if healthy.isEmpty {
+            lines.append("Not connected to any peer")
+        } else {
+            lines.append("Connected to \(healthy.count) peer\(healthy.count == 1 ? "" : "s")")
+            for peerHealth in healthy {
+                let peerName = name(for: peerHealth.audioEndpoint.address)
+                let ping = peerHealth.rttMs.map { "ping \($0) ms" } ?? "ping pending"
+                lines.append("\(peerName): \(ping)")
+            }
+        }
+
+        lines.append("Uptime: \(Self.formatDuration(engine.uptime))")
+
+        // Per-second rates from the counter deltas since the previous tick.
+        let now = Date()
+        let dt = now.timeIntervalSince(lastRateDate)
+        let received = engine.bytesReceived
+        let sent = engine.bytesSent
+        if dt > 0.2 {
+            let rxRate = Double(received - lastBytesReceived) / 1000.0 / dt
+            let txRate = Double(sent - lastBytesSent) / 1000.0 / dt
+            lines.append(String(format: "Receiving %.1f kB/s; sending %.1f kB/s", max(0, rxRate), max(0, txRate)))
+        }
+        lastBytesReceived = received
+        lastBytesSent = sent
+        lastRateDate = now
+        lines.append(String(format: "Total received %.1f MB; sent %.1f MB",
+                            Double(received) / 1_000_000, Double(sent) / 1_000_000))
+
+        if mixer.activeSessionCount > 0 {
+            lines.append(String(format: "Audio buffer %d ms; output latency %.0f ms",
+                                mixer.currentBufferMs, output.reportedOutputLatencyMs))
+        }
+
+        connectionDetails = lines
+    }
+
+    private static func formatDuration(_ interval: TimeInterval) -> String {
+        let total = Int(interval)
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        if hours > 0 { return "\(hours) h \(minutes) min" }
+        if minutes > 0 { return "\(minutes) min \(seconds) s" }
+        return "\(seconds) seconds"
     }
 
     private func updateCues() {

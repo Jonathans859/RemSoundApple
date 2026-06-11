@@ -38,6 +38,14 @@ public final class AudioReceiverEngine {
     public private(set) var packetsDropped: Int64 = 0
     public private(set) var packetsRejectedNotAllowed: Int64 = 0
     public private(set) var sessionsOpenedCount: Int64 = 0
+    public private(set) var bytesReceived: Int64 = 0
+    public private(set) var bytesSent: Int64 = 0
+    private var startDate: Date?
+
+    /// Time since the listener was started, for the status panel.
+    public var uptime: TimeInterval {
+        startDate.map { Date().timeIntervalSince($0) } ?? 0
+    }
 
     /// Heartbeat packets arriving on the audio socket land here. Wire BEFORE start().
     public var onHeartbeatReceived: ((_ buffer: [UInt8], _ length: Int, _ remote: UDPEndpoint) -> Void)?
@@ -117,6 +125,7 @@ public final class AudioReceiverEngine {
         }, onDiagnostic: { [weak self] msg in self?.onDiagnostic?("network: \(msg)") })
         try sock.start(port: port)
         socket = sock
+        startDate = Date()
 
         let timer = DispatchSource.makeTimerSource(queue: timerQueue)
         timer.schedule(deadline: .now() + 1, repeating: 1)
@@ -130,6 +139,7 @@ public final class AudioReceiverEngine {
         pruneTimer = nil
         socket?.stop()
         socket = nil
+        startDate = nil
         lock.lock()
         sessions.removeAll()
         lock.unlock()
@@ -143,13 +153,16 @@ public final class AudioReceiverEngine {
     /// claims our slot on the v1 pairwise relay).
     @discardableResult
     public func sendFromAudioSocket(_ data: [UInt8], to endpoint: UDPEndpoint) -> Bool {
-        socket?.send(data, to: endpoint) ?? false
+        let sent = socket?.send(data, to: endpoint) ?? false
+        if sent { bytesSent &+= Int64(data.count) }
+        return sent
     }
 
     // MARK: - Packet path (network thread)
 
     private func handleRawPacket(buffer: [UInt8], length: Int, remote: UDPEndpoint) {
         packetsReceived &+= 1
+        bytesReceived &+= Int64(length)
         guard let header = RemPacket.readHeader(buffer, length: length) else {
             packetsDropped &+= 1
             return

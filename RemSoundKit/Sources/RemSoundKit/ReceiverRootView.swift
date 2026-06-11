@@ -15,6 +15,7 @@ public struct ReceiverRootView: View {
     public var body: some View {
         Form {
             statusSection
+            connectionSection
             peersSection
             addPeerSection
             audioSection
@@ -22,6 +23,21 @@ public struct ReceiverRootView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("RemSound")
+    }
+
+    @ViewBuilder
+    private var connectionSection: some View {
+        if !controller.connectionDetails.isEmpty {
+            Section {
+                ForEach(Array(controller.connectionDetails.enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(.callout)
+                        .accessibilityAddTraits(.updatesFrequently)
+                }
+            } header: {
+                Text("Connection")
+            }
+        }
     }
 
     private var statusSection: some View {

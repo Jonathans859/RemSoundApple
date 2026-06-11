@@ -22,6 +22,18 @@ public final class AudioOutput {
     public var onDiagnostic: ((String) -> Void)?
     public private(set) var isRunning = false
 
+    /// Best-effort hardware output latency (device latency + IO buffer) in milliseconds,
+    /// for the status panel. The jitter buffer is the dominant, user-tunable part of the
+    /// end-to-end delay; this is the fixed tail after it.
+    public var reportedOutputLatencyMs: Double {
+#if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        return (session.outputLatency + session.ioBufferDuration) * 1000
+#else
+        return (engine?.outputNode.presentationLatency ?? 0) * 1000
+#endif
+    }
+
     public init(mixer: PlayoutMixer) {
         self.mixer = mixer
     }
