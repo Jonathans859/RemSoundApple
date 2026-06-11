@@ -1,0 +1,173 @@
+import Foundation
+
+public enum PeerHealthState: Sendable {
+    case unknown
+    case healthy
+    case stale
+    case unreachable
+}
+
+public struct PeerHealth: Sendable {
+    public let audioEndpoint: UDPEndpoint
+    public let state: PeerHealthState
+    public let rttMs: Int?
+    public let ageOfLastPong: TimeInterval?
+}
+
+/// Bidirectional UDP heartbeat, wire-compatible with the Windows `HeartbeatService`
+/// single-port model: pings ride the audio port via the shared socket, pongs echo the
+/// originator's monotonic timestamp verbatim so RTT needs no clock sync between peers.
+/// 1 Hz cadence doubles as the NAT keepalive — which is also what claims our slot on the
+/// public relay (v1 pairwise mode) so reflected audio can reach us.
+public final class HeartbeatService {
+    public static let pingInterval: TimeInterval = 1.0
+    public static let healthyWindow: TimeInterval = 2.0
+    public static let unreachableWindow: TimeInterval = 5.0
+
+    /// Outbound transport. REQUIRED — wire to the receiver's main UDP socket so heartbeats
+    /// share the socket (and NAT pinhole) that audio arrives on.
+    public var sendTransport: ((_ data: [UInt8], _ to: UDPEndpoint) -> Bool)?
+    public var onDiagnostic: ((String) -> Void)?
+
+    private let lock = NSLock()
+    private var peers: [UDPEndpoint: PeerState] = [:]
+    private var recentPingSources: [UInt32: Date] = [:]
+    private var timer: DispatchSourceTimer?
+    private let timerQueue = DispatchQueue(label: "RemSound.Heartbeat")
+    private var sequence: UInt32 = 0
+    private let startTime = DispatchTime.now()
+
+    public init() {}
+
+    private var monotonicMs: Int64 {
+        Int64((DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds) / 1_000_000)
+    }
+
+    public var isRunning: Bool { timer != nil }
+
+    public func start() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard timer == nil else { return }
+        let t = DispatchSource.makeTimerSource(queue: timerQueue)
+        t.schedule(deadline: .now() + Self.pingInterval, repeating: Self.pingInterval)
+        t.setEventHandler { [weak self] in self?.sendPings() }
+        t.resume()
+        timer = t
+    }
+
+    public func stop() {
+        lock.lock()
+        defer { lock.unlock() }
+        timer?.cancel()
+        timer = nil
+    }
+
+    /// Replace the tracked peer set (each endpoint is the peer's audio port).
+    public func setTrackedPeers(_ audioEndpoints: [UDPEndpoint]) {
+        lock.lock()
+        defer { lock.unlock() }
+        let desired = Set(audioEndpoints)
+        for key in peers.keys where !desired.contains(key) {
+            peers.removeValue(forKey: key)
+        }
+        for ep in desired where peers[ep] == nil {
+            peers[ep] = PeerState()
+        }
+    }
+
+    public func allPeerHealth() -> [PeerHealth] {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = Date()
+        return peers.map { endpoint, state in snapshotHealthLocked(endpoint: endpoint, state: state, now: now) }
+    }
+
+    public func health(for endpoint: UDPEndpoint) -> PeerHealth? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let state = peers[endpoint] else { return nil }
+        return snapshotHealthLocked(endpoint: endpoint, state: state, now: Date())
+    }
+
+    private func snapshotHealthLocked(endpoint: UDPEndpoint, state: PeerState, now: Date) -> PeerHealth {
+        guard let lastPong = state.lastPong else {
+            if let firstPing = state.firstPingSent, now.timeIntervalSince(firstPing) > Self.unreachableWindow {
+                return PeerHealth(audioEndpoint: endpoint, state: .unreachable, rttMs: nil,
+                                  ageOfLastPong: now.timeIntervalSince(firstPing))
+            }
+            return PeerHealth(audioEndpoint: endpoint, state: .unknown, rttMs: nil, ageOfLastPong: nil)
+        }
+        let age = now.timeIntervalSince(lastPong)
+        let healthState: PeerHealthState = age <= Self.healthyWindow
+            ? .healthy
+            : (age <= Self.unreachableWindow ? .stale : .unreachable)
+        return PeerHealth(audioEndpoint: endpoint, state: healthState, rttMs: state.rttEwmaMs, ageOfLastPong: age)
+    }
+
+    private func sendPings() {
+        guard let transport = sendTransport else { return }
+        lock.lock()
+        let targets = Array(peers.keys)
+        let now = Date()
+        for state in peers.values where state.firstPingSent == nil {
+            state.firstPingSent = now
+        }
+        sequence &+= 1
+        let seq = sequence
+        lock.unlock()
+
+        // streamId 0xFFFF marks heartbeats, same as the Windows sender.
+        var packet = RemPacket.writeHeader(type: .heartbeat, streamId: 0xFFFF, sequence: seq)
+        packet.append(RemPacket.writeHeartbeatPayload(kind: .ping, originatorTickMs: monotonicMs))
+        let bytes = [UInt8](packet)
+        for target in targets {
+            _ = transport(bytes, target)
+        }
+    }
+
+    /// Feed a heartbeat packet that arrived on the shared audio socket.
+    public func handleInjectedPacket(_ buffer: [UInt8], length: Int, remote: UDPEndpoint) {
+        guard let header = RemPacket.readHeader(buffer, length: length), header.type == .heartbeat else { return }
+        guard let (kind, originatorTickMs) = RemPacket.readHeartbeat(buffer[RemPacket.headerSize..<length]) else { return }
+
+        if kind == .ping {
+            lock.lock()
+            recentPingSources[remote.address] = Date()
+            sequence &+= 1
+            let seq = sequence
+            lock.unlock()
+            // Echo the originator's timestamp back as a Pong, to wherever the ping came from
+            // (works for LAN-direct and relay-return alike).
+            var reply = RemPacket.writeHeader(type: .heartbeat, streamId: 0xFFFF, sequence: seq)
+            reply.append(RemPacket.writeHeartbeatPayload(kind: .pong, originatorTickMs: originatorTickMs))
+            _ = sendTransport?([UInt8](reply), remote)
+            return
+        }
+
+        // Pong: RTT against our own clock; match tracked peers by IP only (the pong's source
+        // port is the peer's outbound/NAT port, not its audio port).
+        let rtt = Int(max(0, monotonicMs - originatorTickMs))
+        let now = Date()
+        lock.lock()
+        for (endpoint, state) in peers where endpoint.address == remote.address {
+            state.lastRttMs = rtt
+            state.rttEwmaMs = state.rttEwmaMs.map { Int(Double($0) * 0.7 + Double(rtt) * 0.3) } ?? rtt
+            state.lastPong = now
+        }
+        lock.unlock()
+    }
+
+    /// True when any peer at this address has answered a ping recently — used to drive the
+    /// disconnect cue without false-firing on a single lost pong.
+    public func isAddressResponsive(_ address: UInt32) -> Bool {
+        allPeerHealth().contains { $0.audioEndpoint.address == address && $0.state == .healthy }
+    }
+
+    private final class PeerState {
+        var firstPingSent: Date?
+        var lastPong: Date?
+        var lastRttMs: Int?
+        var rttEwmaMs: Int?
+    }
+}

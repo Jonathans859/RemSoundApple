@@ -1,0 +1,61 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-kit:
+    name: RemSoundKit unit tests (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: swift test --package-path RemSoundKit
+
+  build-macos:
+    name: Build macOS app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (unsigned)
+        run: |
+          xcodebuild build \
+            -project RemSound.xcodeproj \
+            -scheme RemSound-macOS \
+            -destination 'platform=macOS' \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=""
+      - name: Zip app
+        run: ditto -c -k --keepParent build/Build/Products/Release/RemSound.app RemSound-macOS-unsigned.zip
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemSound-macOS-unsigned
+          path: RemSound-macOS-unsigned.zip
+
+  build-ios:
+    name: Build iOS app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (unsigned, device SDK)
+        run: |
+          xcodebuild build \
+            -project RemSound.xcodeproj \
+            -scheme RemSound-iOS \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=""
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/RemSound.app Payload/
+          zip -qry RemSound-iOS-unsigned.ipa Payload
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemSound-iOS-unsigned
+          path: RemSound-iOS-unsigned.ipa

@@ -1,0 +1,408 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AB1000000000000000000001 /* RemSoundIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF1000000000000000000001 /* RemSoundIOSApp.swift */; };
+		AB1000000000000000000002 /* connect.wav in Resources */ = {isa = PBXBuildFile; fileRef = AF3000000000000000000001 /* connect.wav */; };
+		AB1000000000000000000003 /* disconnect.wav in Resources */ = {isa = PBXBuildFile; fileRef = AF3000000000000000000002 /* disconnect.wav */; };
+		AB1000000000000000000004 /* RemSoundKit in Frameworks */ = {isa = PBXBuildFile; productRef = AC1000000000000000000001 /* RemSoundKit */; };
+		AB2000000000000000000001 /* RemSoundMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF2000000000000000000001 /* RemSoundMacApp.swift */; };
+		AB2000000000000000000002 /* connect.wav in Resources */ = {isa = PBXBuildFile; fileRef = AF3000000000000000000001 /* connect.wav */; };
+		AB2000000000000000000003 /* disconnect.wav in Resources */ = {isa = PBXBuildFile; fileRef = AF3000000000000000000002 /* disconnect.wav */; };
+		AB2000000000000000000004 /* RemSoundKit in Frameworks */ = {isa = PBXBuildFile; productRef = AC2000000000000000000001 /* RemSoundKit */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		AF1000000000000000000001 /* RemSoundIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemSoundIOSApp.swift; sourceTree = "<group>"; };
+		AF1000000000000000000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AF2000000000000000000001 /* RemSoundMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemSoundMacApp.swift; sourceTree = "<group>"; };
+		AF2000000000000000000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AF3000000000000000000001 /* connect.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = connect.wav; sourceTree = "<group>"; };
+		AF3000000000000000000002 /* disconnect.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = disconnect.wav; sourceTree = "<group>"; };
+		AF4000000000000000000001 /* RemSound.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RemSound.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AF4000000000000000000002 /* RemSound.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RemSound.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AE1000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AB1000000000000000000004 /* RemSoundKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AE2000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AB2000000000000000000004 /* RemSoundKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AA0000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000003 /* Apps */,
+				AA0000000000000000000006 /* Resources */,
+				AA0000000000000000000002 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000002 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AF4000000000000000000001 /* RemSound.app */,
+				AF4000000000000000000002 /* RemSound.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000003 /* Apps */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000004 /* iOS */,
+				AA0000000000000000000005 /* macOS */,
+			);
+			path = Apps;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000004 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				AF1000000000000000000001 /* RemSoundIOSApp.swift */,
+				AF1000000000000000000002 /* Info.plist */,
+			);
+			path = iOS;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000005 /* macOS */ = {
+			isa = PBXGroup;
+			children = (
+				AF2000000000000000000001 /* RemSoundMacApp.swift */,
+				AF2000000000000000000002 /* Info.plist */,
+			);
+			path = macOS;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000006 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				AF3000000000000000000001 /* connect.wav */,
+				AF3000000000000000000002 /* disconnect.wav */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AD1000000000000000000001 /* RemSound-iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AD1000000000000000000002 /* Build configuration list for PBXNativeTarget "RemSound-iOS" */;
+			buildPhases = (
+				AE1000000000000000000001 /* Sources */,
+				AE1000000000000000000002 /* Frameworks */,
+				AE1000000000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "RemSound-iOS";
+			packageProductDependencies = (
+				AC1000000000000000000001 /* RemSoundKit */,
+			);
+			productName = "RemSound-iOS";
+			productReference = AF4000000000000000000001 /* RemSound.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AD2000000000000000000001 /* RemSound-macOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AD2000000000000000000002 /* Build configuration list for PBXNativeTarget "RemSound-macOS" */;
+			buildPhases = (
+				AE2000000000000000000001 /* Sources */,
+				AE2000000000000000000002 /* Frameworks */,
+				AE2000000000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "RemSound-macOS";
+			packageProductDependencies = (
+				AC2000000000000000000001 /* RemSoundKit */,
+			);
+			productName = "RemSound-macOS";
+			productReference = AF4000000000000000000002 /* RemSound.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AA0000000000000000000000 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = AA0000000000000000000007 /* Build configuration list for PBXProject "RemSound" */;
+			compatibilityVersion = "Xcode 15.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = AA0000000000000000000001;
+			packageReferences = (
+				AC0000000000000000000001 /* XCLocalSwiftPackageReference "RemSoundKit" */,
+			);
+			productRefGroup = AA0000000000000000000002 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AD1000000000000000000001 /* RemSound-iOS */,
+				AD2000000000000000000001 /* RemSound-macOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AE1000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AB1000000000000000000002 /* connect.wav in Resources */,
+				AB1000000000000000000003 /* disconnect.wav in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AE2000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AB2000000000000000000002 /* connect.wav in Resources */,
+				AB2000000000000000000003 /* disconnect.wav in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AE1000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AB1000000000000000000001 /* RemSoundIOSApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AE2000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AB2000000000000000000001 /* RemSoundMacApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AA0000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AA0000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		AD1000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/iOS/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jonathan859.remsound.ios;
+				PRODUCT_NAME = RemSound;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		AD1000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/iOS/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jonathan859.remsound.ios;
+				PRODUCT_NAME = RemSound;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		AD2000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/macOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jonathan859.remsound.mac;
+				PRODUCT_NAME = RemSound;
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Debug;
+		};
+		AD2000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/macOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jonathan859.remsound.mac;
+				PRODUCT_NAME = RemSound;
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AA0000000000000000000007 /* Build configuration list for PBXProject "RemSound" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000008 /* Debug */,
+				AA0000000000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AD1000000000000000000002 /* Build configuration list for PBXNativeTarget "RemSound-iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AD1000000000000000000003 /* Debug */,
+				AD1000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AD2000000000000000000002 /* Build configuration list for PBXNativeTarget "RemSound-macOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AD2000000000000000000003 /* Debug */,
+				AD2000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		AC0000000000000000000001 /* XCLocalSwiftPackageReference "RemSoundKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = RemSoundKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AC1000000000000000000001 /* RemSoundKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RemSoundKit;
+		};
+		AC2000000000000000000001 /* RemSoundKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RemSoundKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = AA0000000000000000000000 /* Project object */;
+}

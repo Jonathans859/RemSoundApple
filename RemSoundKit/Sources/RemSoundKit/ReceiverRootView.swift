@@ -1,0 +1,160 @@
+import SwiftUI
+
+/// The main receiver UI, shared by the iOS app and the macOS menu-bar window. Built
+/// VoiceOver-first: every control carries an explicit label and value, status lines are
+/// plain readable sentences, and nothing requires a pointer.
+public struct ReceiverRootView: View {
+    @Bindable private var controller: ReceiverController
+    @State private var newPeerHost = ""
+    @FocusState private var addPeerFocused: Bool
+
+    public init(controller: ReceiverController) {
+        self.controller = controller
+    }
+
+    public var body: some View {
+        Form {
+            statusSection
+            peersSection
+            addPeerSection
+            audioSection
+            securitySection
+        }
+        .formStyle(.grouped)
+        .navigationTitle("RemSound")
+    }
+
+    private var statusSection: some View {
+        Section {
+            Text(controller.statusSummary)
+                .font(.headline)
+                .accessibilityLabel("Status: \(controller.statusSummary)")
+                .accessibilityAddTraits(.updatesFrequently)
+
+            Toggle(isOn: Binding(
+                get: { controller.isRunning },
+                set: { running in running ? controller.start() : controller.stop() }
+            )) {
+                Text("Receive audio")
+            }
+            .accessibilityHint("Starts or stops listening for RemSound senders")
+
+            if let error = controller.lastError {
+                Text(error)
+                    .foregroundStyle(.red)
+                    .accessibilityLabel("Error: \(error)")
+            }
+        } header: {
+            Text("Status")
+        }
+    }
+
+    private var peersSection: some View {
+        Section {
+            if controller.peers.isEmpty {
+                Text("No peers yet. Peers on the same network appear automatically; add an address below for Tailscale or the relay.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(controller.peers) { peer in
+                peerRow(peer)
+            }
+        } header: {
+            Text("Peers")
+        } footer: {
+            Text("Tick a peer to hear its audio. Audio plays only from peers you have selected.")
+        }
+    }
+
+    @ViewBuilder
+    private func peerRow(_ peer: PeerListEntry) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Toggle(isOn: Binding(
+                get: { peer.isSelected },
+                set: { controller.setPeerSelected(peer, selected: $0) }
+            )) {
+                VStack(alignment: .leading) {
+                    Text(peer.name)
+                    Text(peer.statusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityLabel("\(peer.name), \(peer.statusText)")
+            .accessibilityHint(peer.isSelected ? "Selected. Double tap to stop receiving from this peer."
+                                               : "Not selected. Double tap to receive audio from this peer.")
+        }
+        .contextMenu {
+            if let manualId = peer.manualPeerId {
+                Button("Remove peer", role: .destructive) {
+                    controller.removeManualPeer(id: manualId)
+                }
+            }
+        }
+        .swipeActions(edge: .trailing) {
+            if let manualId = peer.manualPeerId {
+                Button("Remove", role: .destructive) {
+                    controller.removeManualPeer(id: manualId)
+                }
+            }
+        }
+    }
+
+    private var addPeerSection: some View {
+        Section {
+            HStack {
+                TextField("Address or hostname", text: $newPeerHost)
+                    .focused($addPeerFocused)
+                    .autocorrectionDisabled()
+#if os(iOS)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+#endif
+                    .onSubmit(addPeer)
+                    .accessibilityHint("A LAN IP, Tailscale IP, or the RemSound relay hostname. The standard port is used automatically.")
+                Button("Add", action: addPeer)
+                    .disabled(newPeerHost.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        } header: {
+            Text("Add a peer by address")
+        }
+    }
+
+    private func addPeer() {
+        controller.addManualPeer(host: newPeerHost)
+        newPeerHost = ""
+        addPeerFocused = false
+    }
+
+    private var audioSection: some View {
+        Section {
+            HStack {
+                Text("Volume")
+                Slider(value: $controller.volume, in: 0...1, step: 0.05)
+                    .accessibilityLabel("Volume")
+                    .accessibilityValue("\(Int(controller.volume * 100)) percent")
+            }
+            Toggle("Mute", isOn: $controller.isMuted)
+
+            Stepper(value: $controller.targetLatencyMs, in: 5...500, step: 5) {
+                Text("Maximum delay: \(controller.targetLatencyMs) milliseconds")
+            }
+            .accessibilityHint("Lower is faster but needs a steadier network. The Windows app default is 80 milliseconds.")
+
+            Toggle("Connection sounds", isOn: $controller.cuesEnabled)
+                .accessibilityHint("Plays a sound when a peer's audio starts or stops")
+        } header: {
+            Text("Playback")
+        }
+    }
+
+    private var securitySection: some View {
+        Section {
+            SecureField("Password", text: $controller.password)
+                .accessibilityHint("Must match the password set on the sending computer. Audio stays silent until the passwords match.")
+        } header: {
+            Text("Password")
+        } footer: {
+            Text("All audio is encrypted end to end. Use the same password as the RemSound profile on the sending computer.")
+        }
+    }
+}
