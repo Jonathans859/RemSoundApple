@@ -11,7 +11,11 @@ struct DiscoveryMessage: Codable {
     let CanReceive: Bool
 }
 
-/// A peer seen via discovery announcements. Mirrors `RemSound.Core.PeerAnnouncement`.
+/// A peer seen via discovery announcements. Mirrors `RemSound.Core.PeerAnnouncement`,
+/// except that one instance keeps ALL the source addresses it announces from. A multi-homed
+/// peer (LAN + VPN, e.g. Tailscale) announces from several addresses at once; the Windows
+/// model of one address per instance makes the stored peer flap between paths on every
+/// alternating announcement, which churns the allow-list, heartbeat state, and row identity.
 public struct PeerAnnouncement: Identifiable, Hashable, Sendable {
     public let instanceId: UUID
     public let name: String
@@ -19,18 +23,29 @@ public struct PeerAnnouncement: Identifiable, Hashable, Sendable {
     public let canSend: Bool
     public let canReceive: Bool
     public let lastSeenUtc: Date
-    /// IPv4 source address, network byte order.
-    public let address: UInt32
+    /// All live IPv4 source addresses (network byte order), first-seen first. Never empty.
+    public let addresses: [UInt32]
 
     public var id: UUID { instanceId }
+
+    /// Primary (oldest still-live) address — the stable display identity.
+    public var address: UInt32 { addresses[0] }
 
     public var addressString: String {
         UDPEndpoint(address: address, port: 0).addressString
     }
 
+    public var addressStrings: [String] {
+        addresses.map { UDPEndpoint(address: $0, port: 0).addressString }
+    }
+
     public var displayName: String { "\(name) at \(addressString)" }
 
     public var audioEndpoint: UDPEndpoint { UDPEndpoint(address: address, port: audioPort) }
+
+    public var audioEndpoints: [UDPEndpoint] {
+        addresses.map { UDPEndpoint(address: $0, port: audioPort) }
+    }
 }
 
 /// UDP peer discovery, wire-compatible with the Windows `PeerDiscoveryService`:
@@ -47,9 +62,20 @@ public final class PeerDiscoveryService {
     private static let announceInterval: TimeInterval = 1.5
     private static let peerExpirySeconds: TimeInterval = 8
 
+    /// Mutable per-instance state behind `PeerAnnouncement` snapshots: each announce path
+    /// (source address) expires independently, and `addressOrder` keeps the primary stable.
+    private struct PeerRecord {
+        var name: String
+        var audioPort: UInt16
+        var canSend: Bool
+        var canReceive: Bool
+        var addressOrder: [UInt32]
+        var lastSeenByAddress: [UInt32: Date]
+    }
+
     private let instanceId = UUID()
     private let lock = NSLock()
-    private var peers: [UUID: PeerAnnouncement] = [:]
+    private var peers: [UUID: PeerRecord] = [:]
     private var socket: UDPSocket?
     private var announceTimer: DispatchSourceTimer?
     private let timerQueue = DispatchQueue(label: "RemSound.Discovery")
@@ -68,7 +94,16 @@ public final class PeerDiscoveryService {
         lock.lock()
         defer { lock.unlock() }
         pruneExpiredLocked()
-        return peers.values.sorted {
+        return peers.map { id, record in
+            PeerAnnouncement(
+                instanceId: id,
+                name: record.name,
+                audioPort: record.audioPort,
+                canSend: record.canSend,
+                canReceive: record.canReceive,
+                lastSeenUtc: record.lastSeenByAddress.values.max() ?? .distantPast,
+                addresses: record.addressOrder)
+        }.sorted {
             $0.name == $1.name ? $0.addressString < $1.addressString : $0.name < $1.name
         }
     }
@@ -140,37 +175,48 @@ public final class PeerDiscoveryService {
         }
     }
 
-    private func handleAnnouncement(buffer: [UInt8], length: Int, remote: UDPEndpoint) {
+    // Internal (not private) so tests can drive the multi-address bookkeeping without sockets.
+    func handleAnnouncement(buffer: [UInt8], length: Int, remote: UDPEndpoint) {
         let data = Data(buffer[0..<length])
         guard let message = try? JSONDecoder().decode(DiscoveryMessage.self, from: data) else { return }
         // Our own broadcasts come back to us; the InstanceId check filters them out.
         guard message.InstanceId != instanceId else { return }
 
         let trimmedName = message.Name.trimmingCharacters(in: .whitespaces)
-        let peer = PeerAnnouncement(
-            instanceId: message.InstanceId,
-            name: trimmedName.isEmpty ? remote.addressString : trimmedName,
-            audioPort: UInt16(clamping: message.AudioPort),
-            canSend: message.CanSend,
-            canReceive: message.CanReceive,
-            lastSeenUtc: Date(),
-            address: remote.address)
+        let name = trimmedName.isEmpty ? remote.addressString : trimmedName
+        let audioPort = UInt16(clamping: message.AudioPort)
+        let now = Date()
 
         // Announce back the way it came — makes discovery bidirectional over VPNs.
         addUnicastTarget(remote.address)
 
         var changed = false
         lock.lock()
-        if let existing = peers[peer.instanceId] {
-            changed = existing.name != peer.name
-                || existing.audioPort != peer.audioPort
-                || existing.canSend != peer.canSend
-                || existing.canReceive != peer.canReceive
-                || existing.address != peer.address
+        if var existing = peers[message.InstanceId] {
+            changed = existing.name != name
+                || existing.audioPort != audioPort
+                || existing.canSend != message.CanSend
+                || existing.canReceive != message.CanReceive
+            existing.name = name
+            existing.audioPort = audioPort
+            existing.canSend = message.CanSend
+            existing.canReceive = message.CanReceive
+            if existing.lastSeenByAddress[remote.address] == nil {
+                existing.addressOrder.append(remote.address)
+                changed = true // new path for a known peer — allow-list etc. must re-feed
+            }
+            existing.lastSeenByAddress[remote.address] = now
+            peers[message.InstanceId] = existing
         } else {
+            peers[message.InstanceId] = PeerRecord(
+                name: name,
+                audioPort: audioPort,
+                canSend: message.CanSend,
+                canReceive: message.CanReceive,
+                addressOrder: [remote.address],
+                lastSeenByAddress: [remote.address: now])
             changed = true
         }
-        peers[peer.instanceId] = peer
         pruneExpiredLocked()
         lock.unlock()
 
@@ -179,8 +225,15 @@ public final class PeerDiscoveryService {
 
     private func pruneExpiredLocked() {
         let cutoff = Date().addingTimeInterval(-Self.peerExpirySeconds)
-        for (id, peer) in peers where peer.lastSeenUtc < cutoff {
-            peers.removeValue(forKey: id)
+        for (id, record) in peers {
+            var updated = record
+            updated.addressOrder.removeAll { (updated.lastSeenByAddress[$0] ?? .distantPast) < cutoff }
+            updated.lastSeenByAddress = updated.lastSeenByAddress.filter { $0.value >= cutoff }
+            if updated.addressOrder.isEmpty {
+                peers.removeValue(forKey: id)
+            } else if updated.addressOrder.count != record.addressOrder.count {
+                peers[id] = updated
+            }
         }
     }
 }

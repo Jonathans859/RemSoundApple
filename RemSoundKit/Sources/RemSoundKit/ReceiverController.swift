@@ -14,11 +14,17 @@ public struct PeerListEntry: Identifiable, Hashable, Sendable {
     public let id: String
     public let name: String
     public let addressString: String
-    public let audioEndpoint: UDPEndpoint?
+    /// Every endpoint this peer is reachable at — multi-homed peers (LAN + VPN) have
+    /// several. The first is the primary/display one. Empty while a manual host resolves.
+    public let audioEndpoints: [UDPEndpoint]
     public let source: Source
     public let manualPeerId: UUID?
     public var isSelected: Bool
     public var statusText: String
+
+    public var audioEndpoint: UDPEndpoint? { audioEndpoints.first }
+    var addresses: [UInt32] { audioEndpoints.map(\.address) }
+    var allAddressStrings: [String] { audioEndpoints.map(\.addressString) }
 }
 
 /// App-facing coordinator: owns the engine, audio output, discovery, heartbeat, and cues;
@@ -216,10 +222,18 @@ public final class ReceiverController {
     }
 
     public func setPeerSelected(_ entry: PeerListEntry, selected: Bool) {
+        // Select/deselect every address the peer is reachable at, plus the manual hostname
+        // if there is one, so the choice survives path changes and re-resolution.
+        var strings = Set(entry.allAddressStrings)
+        strings.insert(entry.addressString)
+        if let manualId = entry.manualPeerId,
+           let manual = manualPeers.first(where: { $0.id == manualId }) {
+            strings.insert(manual.host)
+        }
         if selected {
-            selectedAddresses.insert(entry.addressString)
+            selectedAddresses.formUnion(strings)
         } else {
-            selectedAddresses.remove(entry.addressString)
+            selectedAddresses.subtract(strings)
         }
         settings.selectedPeerAddresses = selectedAddresses
         applyPeerSelection()
@@ -251,10 +265,14 @@ public final class ReceiverController {
         var unicast: [UInt32] = []
 
         for peer in discovery.currentPeers {
-            unicast.append(peer.address)
-            if selectedAddresses.contains(peer.addressString) {
-                allowed.insert(peer.address)
-                tracked.append(peer.audioEndpoint)
+            unicast.append(contentsOf: peer.addresses)
+            // Selected if ANY of its addresses is — and then allow/track ALL of them: the
+            // sender picks its own route, so audio can arrive from any of the peer's paths.
+            if peer.addressStrings.contains(where: { selectedAddresses.contains($0) }) {
+                allowed.formUnion(peer.addresses)
+                for endpoint in peer.audioEndpoints where !tracked.contains(endpoint) {
+                    tracked.append(endpoint)
+                }
             }
         }
         for peer in manualPeers {
@@ -290,27 +308,33 @@ public final class ReceiverController {
         var lines: [String] = []
 
         // Connected = selected peers whose heartbeat is currently healthy, like Windows.
-        // The line set must stay structurally stable from tick to tick — every tracked peer
-        // always gets a line, and the rate/buffer lines are always present — otherwise the
-        // Form rows below shift every second and become impossible to tap.
+        // One line per selected peer ROW (a multi-homed peer is pinged on every path; show
+        // the best), and the line set stays structurally stable from tick to tick — every
+        // peer always gets a line, and the rate/buffer lines are always present — otherwise
+        // the Form rows below shift every second and become impossible to tap.
         let health = heartbeat.allPeerHealth()
-            .sorted { name(for: $0.audioEndpoint.address) < name(for: $1.audioEndpoint.address) }
-        let healthyCount = health.filter { $0.state == .healthy }.count
+        let trackedEntries = peers.filter { $0.isSelected && !$0.audioEndpoints.isEmpty }
+        let bests = trackedEntries.map { ($0, bestHealth(for: $0.addresses, in: health)) }
+        let healthyCount = bests.filter { $0.1?.state == .healthy }.count
         if healthyCount == 0 {
             lines.append("Not connected to any peer")
         } else {
             lines.append("Connected to \(healthyCount) peer\(healthyCount == 1 ? "" : "s")")
         }
-        for peerHealth in health {
-            let peerName = name(for: peerHealth.audioEndpoint.address)
+        for (entry, best) in bests {
             let status: String
-            switch peerHealth.state {
-            case .healthy: status = peerHealth.rttMs.map { "ping \($0) ms" } ?? "ping pending"
+            switch best?.state {
+            case .healthy:
+                if let rtt = best?.rttMs {
+                    status = "ping \(rtt) ms"
+                } else {
+                    status = "ping pending"
+                }
             case .stale: status = "connection unstable"
             case .unreachable: status = "not responding"
-            case .unknown: status = "waiting for a reply"
+            case .unknown, nil: status = "waiting for a reply"
             }
-            lines.append("\(peerName): \(status)")
+            lines.append("\(entry.name): \(status)")
         }
 
         lines.append("Uptime: \(Self.formatDuration(engine.uptime))")
@@ -356,9 +380,11 @@ public final class ReceiverController {
     private func updateCues() {
         var nowAudible: Set<UInt32> = []
         for entry in peers {
-            guard let endpoint = entry.audioEndpoint, entry.isSelected else { continue }
-            if engine.isAudioFlowing(from: endpoint.address, within: 1.5) {
-                nowAudible.insert(endpoint.address)
+            guard entry.isSelected, let primary = entry.audioEndpoint else { continue }
+            // Keyed by the stable primary address even when audio arrives on another path,
+            // so a path switch doesn't fire a spurious disconnect+connect cue pair.
+            if entry.addresses.contains(where: { engine.isAudioFlowing(from: $0, within: 1.5) }) {
+                nowAudible.insert(primary.address)
             }
         }
         let appeared = nowAudible.subtracting(audibleAddresses)
@@ -372,7 +398,25 @@ public final class ReceiverController {
 
     private func name(for address: UInt32) -> String {
         let addressString = UDPEndpoint(address: address, port: 0).addressString
-        return peers.first { $0.addressString == addressString }?.name ?? addressString
+        return peers.first { $0.addresses.contains(address) || $0.addressString == addressString }?.name
+            ?? addressString
+    }
+
+    /// Best heartbeat result across a peer's addresses: healthiest state first, then lowest
+    /// round trip.
+    private func bestHealth(for addresses: [UInt32], in health: [PeerHealth]) -> PeerHealth? {
+        health
+            .filter { addresses.contains($0.audioEndpoint.address) }
+            .min { (Self.healthRank($0.state), $0.rttMs ?? .max) < (Self.healthRank($1.state), $1.rttMs ?? .max) }
+    }
+
+    private static func healthRank(_ state: PeerHealthState) -> Int {
+        switch state {
+        case .healthy: return 0
+        case .stale: return 1
+        case .unknown: return 2
+        case .unreachable: return 3
+        }
     }
 
     private func announce(_ message: String) {
@@ -390,68 +434,75 @@ public final class ReceiverController {
         var seenAddresses: Set<String> = []
 
         for peer in discovery.currentPeers {
-            let selected = selectedAddresses.contains(peer.addressString)
+            let selected = peer.addressStrings.contains { selectedAddresses.contains($0) }
             entries.append(PeerListEntry(
-                id: "d-\(peer.addressString)",
+                id: "d-\(peer.instanceId)", // instanceId, NOT address — stable across path changes
                 name: peer.name,
                 addressString: peer.addressString,
-                audioEndpoint: peer.audioEndpoint,
+                audioEndpoints: peer.audioEndpoints,
                 source: .discovered,
                 manualPeerId: nil,
                 isSelected: selected,
-                statusText: statusText(address: peer.address, selected: selected)))
-            seenAddresses.insert(peer.addressString)
+                statusText: statusText(addresses: peer.addresses, selected: selected)))
+            seenAddresses.formUnion(peer.addressStrings)
         }
 
         for peer in manualPeers {
             let resolved = manualResolved[peer.id] ?? []
-            guard let endpoint = resolved.first else {
+            guard !resolved.isEmpty else {
                 entries.append(PeerListEntry(
                     id: "m-\(peer.id)",
                     name: peer.displayName,
                     addressString: peer.host,
-                    audioEndpoint: nil,
+                    audioEndpoints: [],
                     source: .manual,
                     manualPeerId: peer.id,
                     isSelected: selectedAddresses.contains(peer.host),
                     statusText: isRunning ? "Resolving…" : "—"))
                 continue
             }
-            if seenAddresses.contains(endpoint.addressString) { continue } // merged with discovery row
-            let selected = selectedAddresses.contains(endpoint.addressString) || selectedAddresses.contains(peer.host)
+            // Merged with a discovery row when any resolved address matches one.
+            if resolved.contains(where: { seenAddresses.contains($0.addressString) }) { continue }
+            let selected = selectedAddresses.contains(peer.host)
+                || resolved.contains { selectedAddresses.contains($0.addressString) }
             entries.append(PeerListEntry(
                 id: "m-\(peer.id)",
                 name: peer.displayName,
-                addressString: endpoint.addressString,
-                audioEndpoint: endpoint,
+                addressString: resolved[0].addressString,
+                audioEndpoints: resolved,
                 source: .manual,
                 manualPeerId: peer.id,
                 isSelected: selected,
-                statusText: statusText(address: endpoint.address, selected: selected)))
+                statusText: statusText(addresses: resolved.map(\.address), selected: selected)))
         }
 
         peers = entries
     }
 
-    private func statusText(address: UInt32, selected: Bool) -> String {
+    private func statusText(addresses: [UInt32], selected: Bool) -> String {
         guard isRunning else { return "—" }
         guard selected else { return "Not selected" }
 
         var parts: [String] = []
-        if let format = engine.activeFormat(from: address), engine.isAudioFlowing(from: address, within: 1.5) {
+        let flowing = addresses.first { engine.isAudioFlowing(from: $0, within: 1.5) }
+        if let flowing, let format = engine.activeFormat(from: flowing) {
             parts.append("Receiving \(format.codec == .opus ? "Opus" : "PCM") \(Int(format.frameDurationMs.rounded())) ms frames")
         } else {
             parts.append("No audio")
         }
 
-        switch engine.peerSecurityStatus(address: address) {
-        case .secure: parts.append("encrypted link")
-        case .passwordMismatch: parts.append("password does not match")
-        case .peerNeedsUpdate: parts.append("peer app needs update")
-        case .unknown: break
+        // Worst-news-first across the peer's paths: a mismatch on any of them matters more
+        // than a clean link on another.
+        let security = addresses.map { engine.peerSecurityStatus(address: $0) }
+        if security.contains(.passwordMismatch) {
+            parts.append("password does not match")
+        } else if security.contains(.peerNeedsUpdate) {
+            parts.append("peer app needs update")
+        } else if security.contains(.secure) {
+            parts.append("encrypted link")
         }
 
-        let health = heartbeat.allPeerHealth().first { $0.audioEndpoint.address == address }
+        let health = bestHealth(for: addresses, in: heartbeat.allPeerHealth())
         switch health?.state {
         case .healthy:
             if let rtt = health?.rttMs { parts.append("\(rtt) ms round trip") }
