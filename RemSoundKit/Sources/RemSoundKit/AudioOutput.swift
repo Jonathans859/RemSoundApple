@@ -9,9 +9,14 @@ import Foundation
 /// screen locked or the app in the background) and asks for a short IO buffer for low output
 /// latency. Interruptions (calls, Siri) and media-services resets restart the engine.
 public final class AudioOutput {
+    /// Upper bound on frames rendered per inner loop; the interleaved scratch is sized to
+    /// this. IO buffers are far smaller (~256 frames at 5 ms), larger requests are chunked.
+    private static let renderChunkFrames = 4096
+
     private let mixer: PlayoutMixer
     private var engine: AVAudioEngine?
     private var sourceNode: AVAudioSourceNode?
+    private var renderScratch: UnsafeMutablePointer<Float>?
     private var observers: [NSObjectProtocol] = []
 
     public var onDiagnostic: ((String) -> Void)?
@@ -36,13 +41,33 @@ public final class AudioOutput {
 #endif
 
         let engine = AVAudioEngine()
-        let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: true)!
+        // The connection format MUST be the deinterleaved "standard" layout — AVAudioEngine's
+        // mixer nodes reject interleaved input with an unhandleable NSException at connect().
+        // The mix bus is interleaved internally, so the render callback fills a pre-allocated
+        // interleaved scratch and splits it into the channel planes, in bounded chunks so the
+        // audio thread never allocates.
+        let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
+        let scratch = UnsafeMutablePointer<Float>.allocate(capacity: Self.renderChunkFrames * 2)
+        renderScratch = scratch
 
         let source = AVAudioSourceNode(format: format) { [mixer] _, _, frameCount, audioBufferList -> OSStatus in
-            let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
-            guard let buffer = ablPointer.first, let data = buffer.mData else { return noErr }
-            mixer.render(into: data.assumingMemoryBound(to: Float.self), frames: Int(frameCount))
+            let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
+            guard abl.count >= 2,
+                  let leftRaw = abl[0].mData, let rightRaw = abl[1].mData else { return noErr }
+            let left = leftRaw.assumingMemoryBound(to: Float.self)
+            let right = rightRaw.assumingMemoryBound(to: Float.self)
+
+            var rendered = 0
+            let total = Int(frameCount)
+            while rendered < total {
+                let chunk = min(Self.renderChunkFrames, total - rendered)
+                mixer.render(into: scratch, frames: chunk)
+                for i in 0..<chunk {
+                    left[rendered + i] = scratch[i * 2]
+                    right[rendered + i] = scratch[i * 2 + 1]
+                }
+                rendered += chunk
+            }
             return noErr
         }
 
@@ -63,6 +88,10 @@ public final class AudioOutput {
         if let source = sourceNode { engine?.detach(source) }
         engine = nil
         sourceNode = nil
+        // Free the render scratch only after the engine is stopped and the source node
+        // detached — the render callback captured this pointer.
+        renderScratch?.deallocate()
+        renderScratch = nil
         isRunning = false
 #if os(iOS)
         removeSessionObservers()
@@ -108,6 +137,8 @@ public final class AudioOutput {
             self.isRunning = false
             self.engine = nil
             self.sourceNode = nil
+            self.renderScratch?.deallocate()
+            self.renderScratch = nil
             try? self.start()
         })
 
