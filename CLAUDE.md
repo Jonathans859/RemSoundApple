@@ -102,11 +102,14 @@ These are the wire contract. Breaking any of them silently breaks interop:
   - `OpusStreamEncoder.swift` — libopus encoder via `RemOpusShim` (separate C target in
     the package: `opus_encoder_ctl` is C-variadic, Swift can't call it; the shim exposes
     fixed-signature wrappers and depends on swift-opus's `Copus` product).
-  - `MicrophoneCapture.swift` — input capture + enumeration/selection. iOS: AVAudioSession
-    ports + built-in-mic data sources; macOS: Core Audio input devices set on the input
-    unit. Converts hardware format → 48 kHz interleaved stereo float (mono duplicated
-    into both channels — the converter's default 1→2 mapping is not trusted). Rebuilds
-    itself on `AVAudioEngineConfigurationChange`.
+  - `MicrophoneCapture.swift` — input capture + enumeration/selection. Captures via
+    AVAudioSinkNode (realtime, ~5 ms hardware quanta) → `CaptureRingBuffer.swift`
+    (lock-free SPSC, `Synchronization.Atomic`) → drain thread forwarding 10 ms units, so
+    outbound packets pace ~every 10 ms (NOT installTap — see pitfall 7). iOS:
+    AVAudioSession ports + built-in-mic data sources; macOS: Core Audio input devices set
+    on the input unit. Converts hardware format → 48 kHz interleaved stereo float (mono
+    duplicated into both channels — the converter's default 1→2 mapping is not trusted).
+    Rebuilds itself on `AVAudioEngineConfigurationChange`.
   - `Settings.swift` — UserDefaults + Keychain. `ReceiverRootView.swift` — shared SwiftUI.
 - `Apps/iOS`, `Apps/macOS` — thin entry points. iOS has `audio` background mode (lock-screen
   playback). macOS is a `MenuBarExtra` (LSUIElement); the **label view's `.task`** is the
@@ -141,7 +144,12 @@ These are the wire contract. Breaking any of them silently breaks interop:
    `availableInputs()` on the 1 Hz tick; AVAudioSession / Core Audio HAL enumeration is
    audio-server IPC and produced steady once-a-second crackling in live playback. Inputs
    are refreshed only on route-change / device-list notifications (`onInputsChanged`).
-7. **Multi-homed peers (LAN + Tailscale) announce from several source IPs.** The Windows
+7. **iOS clamps `installTap` buffers to ~100 ms** no matter what bufferSize you request or
+   what the session IO-buffer preference says. The first mic-send capture used a tap and
+   fired ten 10 ms Opus packets back-to-back every 100 ms — the Windows receiver saw it
+   as 100 ms network jitter and needed a ~200 ms buffer. Low-latency capture must use
+   `AVAudioSinkNode` (realtime block → lock-free ring → drain thread).
+8. **Multi-homed peers (LAN + Tailscale) announce from several source IPs.** The Windows
    one-address-per-InstanceId model makes the stored peer flap between paths every
    announcement — never key UI row identity, the allow-list, or heartbeat tracking on a
    single address. `PeerAnnouncement.addresses` keeps all live paths (primary = first

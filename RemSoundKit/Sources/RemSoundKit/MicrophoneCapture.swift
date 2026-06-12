@@ -1,5 +1,6 @@
 import AVFAudio
 import Foundation
+import os
 #if os(macOS)
 import AudioToolbox
 import AVFoundation
@@ -20,8 +21,16 @@ public struct AudioInputDevice: Identifiable, Hashable, Sendable {
 }
 
 /// Captures from the selected microphone/input device and delivers 48 kHz interleaved
-/// stereo float to `onSamples` (called on the capture tap thread). Sample-rate and channel
-/// conversion happen here, so the send engine only ever sees the wire mix format.
+/// stereo float to `onSamples` (called on the dedicated drain thread). Sample-rate and
+/// channel conversion happen here, so the send engine only ever sees the wire mix format.
+///
+/// Capture topology: `AVAudioSinkNode` (realtime thread, hardware quanta ~5 ms) →
+/// lock-free `CaptureRingBuffer` → drain thread (converts and forwards in 10 ms units).
+/// NOT `installTap` — iOS clamps tap buffers to ~100 ms regardless of the requested size,
+/// which made outbound Opus packets leave in ten-packet bursts every 100 ms and forced the
+/// Windows receiver up to a ~200 ms jitter buffer. The sink block runs realtime: it may
+/// only copy into the ring and signal; conversion/encode/encrypt/send stay on the drain
+/// thread, so `AudioEncryptor`'s capture-thread-only contract still holds (one thread).
 ///
 /// iOS: the audio session category must already allow recording (`AudioOutput.setRecordingMode`)
 /// before `start()`. Input selection goes through `AVAudioSession.setPreferredInput` /
@@ -41,6 +50,18 @@ public final class MicrophoneCapture {
     private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
     private var convertedBuffer: AVAudioPCMBuffer?
+    private var sinkNode: AVAudioSinkNode?
+    private var ringBuffer: CaptureRingBuffer?
+    /// Hardware-rate staging buffer the drain thread refills from the ring (one 10 ms
+    /// quantum); also the converter's input. Drain-thread only while running.
+    private var hardwareInputBuffer: AVAudioPCMBuffer?
+    private var drainQuantumFrames = 0
+    private var hardwareSampleRate: Double = 0
+    private var drainThread: Thread?
+    private var drainSemaphore = DispatchSemaphore(value: 0)
+    private var drainExitedSemaphore = DispatchSemaphore(value: 0)
+    private let stateLock = OSAllocatedUnfairLock()
+    private var drainShouldStop = false
     /// Mono→stereo duplication scratch (mono mics must reach both wire channels).
     /// (`MicrophoneCapture.` spelled out: `Self` is not allowed in a class's stored
     /// property initializer.)
@@ -57,7 +78,7 @@ public final class MicrophoneCapture {
 #endif
 
     private static let wireSampleRate = 48_000.0
-    private static let maxConvertedFrames = 9600 // 200 ms at 48 kHz — far above any tap buffer
+    private static let maxConvertedFrames = 9600 // 200 ms at 48 kHz — far above one drain quantum
 
     public init() {
 #if os(iOS)
@@ -157,39 +178,79 @@ public final class MicrophoneCapture {
         // Converter target: wire rate, float32, interleaved. Mono stays mono through the
         // converter and is duplicated into both wire channels below — relying on the
         // converter's default 1→2 channel mapping risks left-only audio.
+        //
+        // Converter SOURCE is the ring's layout: interleaved hardware-rate float (mono
+        // keeps the single-plane layout, which is byte-identical). AVAudioConverter is
+        // fine with interleaved formats — pitfall 1 applies to engine node connections.
+        let hwChannels = Int(hardwareFormat.channelCount)
         let targetChannels: AVAudioChannelCount = hardwareFormat.channelCount == 1 ? 1 : 2
+        let quantumFrames = max(Int(hardwareFormat.sampleRate / 100), 120) // 10 ms of hw audio
         guard
+            let stagingFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32, sampleRate: hardwareFormat.sampleRate,
+                channels: hardwareFormat.channelCount, interleaved: hwChannels > 1),
             let targetFormat = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32, sampleRate: Self.wireSampleRate,
                 channels: targetChannels, interleaved: true),
-            let converter = AVAudioConverter(from: hardwareFormat, to: targetFormat),
+            let converter = AVAudioConverter(from: stagingFormat, to: targetFormat),
             let converted = AVAudioPCMBuffer(
-                pcmFormat: targetFormat, frameCapacity: AVAudioFrameCount(Self.maxConvertedFrames))
+                pcmFormat: targetFormat, frameCapacity: AVAudioFrameCount(Self.maxConvertedFrames)),
+            let staging = AVAudioPCMBuffer(
+                pcmFormat: stagingFormat, frameCapacity: AVAudioFrameCount(quantumFrames))
         else {
             throw NSError(domain: "RemSound", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "Could not prepare the microphone format converter"])
         }
         self.converter = converter
         convertedBuffer = converted
+        hardwareInputBuffer = staging
+        drainQuantumFrames = quantumFrames
+        hardwareSampleRate = hardwareFormat.sampleRate
 
-        input.installTap(onBus: 0, bufferSize: 1024, format: hardwareFormat) { [weak self] buffer, _ in
-            self?.handleTap(buffer)
+        // The realtime sink block may only copy + signal — no locks, no allocation, no
+        // self capture. Everything heavier happens on the drain thread.
+        let ring = CaptureRingBuffer(
+            capacityFrames: Int(hardwareFormat.sampleRate * 0.4), channels: hwChannels)
+        let wakeups = DispatchSemaphore(value: 0)
+        let sink = AVAudioSinkNode { _, frameCount, audioBufferList in
+            ring.write(bufferList: audioBufferList, frames: Int(frameCount))
+            wakeups.signal()
+            return noErr
         }
+        engine.attach(sink)
+        engine.connect(input, to: sink, format: hardwareFormat)
 
         engine.prepare()
         do {
             try engine.start()
         } catch {
-            input.removeTap(onBus: 0)
+            engine.detach(sink)
             self.converter = nil
             convertedBuffer = nil
+            hardwareInputBuffer = nil
             throw error
         }
         self.engine = engine
+        sinkNode = sink
+        ringBuffer = ring
+        drainSemaphore = wakeups
         isRunning = true
 
-        // Route/format changes (AirPods picked up, device unplugged) invalidate the tap
-        // format and converter — rebuild the capture graph.
+        stateLock.lock()
+        drainShouldStop = false
+        stateLock.unlock()
+        let exited = DispatchSemaphore(value: 0)
+        drainExitedSemaphore = exited
+        let thread = Thread { [self] in
+            drainLoop(ring: ring, wakeups: wakeups, exited: exited)
+        }
+        thread.name = "RemSound.MicDrain"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        drainThread = thread
+
+        // Route/format changes (AirPods picked up, device unplugged) invalidate the sink
+        // connection format and converter — rebuild the capture graph.
         configChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
         ) { [weak self] _ in
@@ -209,18 +270,67 @@ public final class MicrophoneCapture {
             NotificationCenter.default.removeObserver(configChangeObserver)
             self.configChangeObserver = nil
         }
-        engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
+        if let sinkNode { engine?.detach(sinkNode) }
+        sinkNode = nil
+        // The render block no longer fires; flag + wake + join the drain thread BEFORE
+        // tearing down the converter state it reads. The join is fast (the loop checks
+        // the flag right after every wait/timeout) and keeps the config-change
+        // stop-then-start rebuild deterministic.
+        stateLock.lock()
+        drainShouldStop = true
+        stateLock.unlock()
+        drainSemaphore.signal()
+        if drainThread != nil {
+            drainExitedSemaphore.wait()
+            drainThread = nil
+        }
         engine = nil
         converter = nil
         convertedBuffer = nil
+        hardwareInputBuffer = nil
+        ringBuffer = nil
         isRunning = false
         onDiagnostic?("microphone capture stopped")
     }
 
-    // MARK: - Tap path (capture thread)
+    // MARK: - Capture diagnostics (plain atomic reads — safe on the 1 Hz status tick)
 
-    private func handleTap(_ buffer: AVAudioPCMBuffer) {
+    /// Duration of the most recent capture callback's chunk in milliseconds (0 until the
+    /// first callback). ~5 ms means healthy sink-node quanta; ~100 ms would mean tap-like
+    /// chunking is back and outbound packets are leaving in bursts again.
+    public var captureChunkMs: Double {
+        guard hardwareSampleRate > 0, let ring = ringBuffer else { return 0 }
+        return Double(ring.lastChunkFrames) * 1000 / hardwareSampleRate
+    }
+
+    /// Hardware frames discarded because the drain thread fell ~400 ms behind capture.
+    public var captureDroppedFrames: Int { ringBuffer?.droppedFrames ?? 0 }
+
+    // MARK: - Drain path (dedicated capture-side thread)
+
+    private func drainLoop(ring: CaptureRingBuffer, wakeups: DispatchSemaphore, exited: DispatchSemaphore) {
+        let quantum = drainQuantumFrames
+        while true {
+            _ = wakeups.wait(timeout: .now() + .milliseconds(250))
+            stateLock.lock()
+            let shouldStop = drainShouldStop
+            stateLock.unlock()
+            if shouldStop { break }
+            while ring.availableFrames >= quantum {
+                guard let staging = hardwareInputBuffer,
+                      let data = staging.floatChannelData?[0],
+                      ring.read(into: data, frames: quantum)
+                else { break }
+                staging.frameLength = AVAudioFrameCount(quantum)
+                convertAndForward(staging)
+            }
+        }
+        exited.signal()
+    }
+
+    /// One hardware-rate quantum → 48 kHz interleaved (mono duplicated) → `onSamples`.
+    private func convertAndForward(_ buffer: AVAudioPCMBuffer) {
         guard let converter, let converted = convertedBuffer, let onSamples else { return }
 
         converted.frameLength = 0

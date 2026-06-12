@@ -458,7 +458,19 @@ public final class ReceiverController {
         } else if sendTargetCount == 0 {
             sendStatus = "No peers selected — tick a peer above to send to it"
         } else {
-            sendStatus = "Sending microphone audio to \(sendTargetCount) peer\(sendTargetCount == 1 ? "" : "s")"
+            var status = "Sending microphone audio to \(sendTargetCount) peer\(sendTargetCount == 1 ? "" : "s")"
+            // Capture cadence diagnostic: ~5 ms = smooth packet pacing; ~100 ms would
+            // mean burst sending is back (the receiving side would need a huge buffer).
+            // Plain atomic read, NOT hardware polling (CLAUDE.md pitfall 6).
+            let chunkMs = microphone.captureChunkMs
+            if chunkMs > 0 {
+                status += String(format: ". Capture chunk %.0f ms", chunkMs)
+            }
+            let dropped = microphone.captureDroppedFrames
+            if dropped > 0 {
+                status += ". \(dropped) capture frames dropped"
+            }
+            sendStatus = status
         }
     }
 
