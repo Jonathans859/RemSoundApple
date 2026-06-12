@@ -111,6 +111,42 @@ final class SessionPlayoutTests: XCTestCase {
         playout.write([Float](repeating: 0.5, count: 240 * 2), frames: 240)
         XCTAssertTrue(render(playout, frames: 64).contains { $0 != 0 })
     }
+
+    func testPartialReadFadesResumeEdgeBackIn() {
+        let endpoint = UDPEndpoint(host: "127.0.0.1", port: 47830)!
+        let playout = SessionPlayout(endpoint: endpoint, streamId: 1, targetLatencyMs: 5)
+        playout.write([Float](repeating: 0.5, count: 240 * 2), frames: 240)
+        _ = render(playout, frames: 200) // arm + consume, 40 frames left
+
+        // Partial read: 40 real frames then a faded-out gap.
+        _ = render(playout, frames: 100)
+
+        // Audio resumes — the first samples must ramp from ~0, not slam to 0.5 against
+        // the faded-to-zero gap edge.
+        playout.write([Float](repeating: 0.5, count: 240 * 2), frames: 240)
+        let output = render(playout, frames: 64)
+        XCTAssertLessThan(abs(output[0]), 0.05, "resume edge must fade in after a partial-read gap")
+        XCTAssertEqual(output[126], 0.5, accuracy: 1e-5, "steady state past the fade window")
+    }
+
+    func testClickTrimKeepsCushionAboveTarget() {
+        let endpoint = UDPEndpoint(host: "127.0.0.1", port: 47830)!
+        // Target 10 ms = 480 frames; 10 ms (480-frame) packets, like the Windows Opus sender.
+        let playout = SessionPlayout(endpoint: endpoint, streamId: 1, targetLatencyMs: 10)
+        let packet = [Float](repeating: 0.5, count: 480 * 2)
+        playout.write(packet, frames: 480)
+        _ = render(playout, frames: 480) // arm + drain
+
+        // Margin (smoothness-3 defaults) = max(4*480 + 192, 720) + 384 = 2496 frames (52 ms).
+        // Six buffered packets (2880) stay under target+margin (2976) — no trim.
+        for _ in 0..<6 { playout.write(packet, frames: 480) }
+        XCTAssertEqual(playout.droppedFrames, 0, "burst within the jitter margin must not trim")
+
+        // The seventh (3360) crosses the threshold → trim to target + 2 packets + 5 ms
+        // = 480 + 960 + 240 = 1680 frames (35 ms), NOT to bare target.
+        playout.write(packet, frames: 480)
+        XCTAssertEqual(playout.bufferedMs, 35, "trim must keep a cushion above target")
+    }
 }
 
 final class MixerTests: XCTestCase {

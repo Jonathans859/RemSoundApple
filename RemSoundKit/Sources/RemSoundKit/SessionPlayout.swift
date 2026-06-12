@@ -11,7 +11,7 @@ import os
 ///   * Same underrun concealment principle — the edges of a gap are faded over ~0.7 ms
 ///     instead of slamming to zero (the click lives in the edge, not the silence).
 ///   * Same click-trim — if the buffer creeps past target + margin (burst arrival, clock
-///     drift), oldest audio is dropped back to target with a fade at the seam.
+///     drift), oldest audio is dropped back to just above target with a fade at the seam.
 ///   * NOT ported: the fixed-ratio drift resampler. At the latencies this receiver targets,
 ///     the trim + re-arm path bounds drift instead; a measured-rate resampler can follow in
 ///     a later version if sustained-drift trims prove audible in practice.
@@ -106,15 +106,22 @@ final class SessionPlayout {
         count += toWrite
 
         // Click-trim: buffer crept past target + margin (burst arrival or sender clock
-        // running fast). Trim back to target; the seam gets a fade-in on the next read.
-        // Margin must clear the natural packet-arrival sawtooth (2 codec frames) but no
-        // more — a stall's late-packet refill otherwise parks the buffer permanently above
-        // target, adding latency the user never asked for. Floor at 10 ms.
-        let margin = max(largestWriteFrames * 2, Self.mixSampleRate / 100)
+        // running fast). Margin and drop-to point mirror the Windows defaults (smoothness
+        // knob = 3): the margin clears the packet-arrival sawtooth with a wide jitter pad,
+        // and the trim keeps a cushion ABOVE target rather than cutting to bare target.
+        // VPN/WAN delivery (Tailscale) is stall-then-burst — trimming the late backlog all
+        // the way to target discards exactly the audio that would have covered the next
+        // stall; the Windows source records that failure as "20 underruns/sec for the rest
+        // of the session". The seam still gets a fade-in on the next read.
+        let msFrames = Self.mixSampleRate / 1000
+        let margin = max(largestWriteFrames * 4 + 4 * msFrames, 15 * msFrames) + 8 * msFrames
         if armed && count > targetFrames + margin {
-            dropOldestLocked(frames: count - targetFrames)
-            trimFireCount += 1
-            fadeInPending = true
+            let keepFrames = targetFrames + largestWriteFrames * 2 + 5 * msFrames
+            if count > keepFrames {
+                dropOldestLocked(frames: count - keepFrames)
+                trimFireCount += 1
+                fadeInPending = true
+            }
         }
     }
 
@@ -200,9 +207,14 @@ final class SessionPlayout {
             lastSampleR = base[lastFrame + 1]
 
             if available < frames {
-                // Partial read — smooth the boundary into the trailing silence.
+                // Partial read — smooth the boundary into the trailing silence, and fade
+                // the resume edge back in. Without the fade-in the next callback restarts
+                // at full amplitude against the faded-to-zero gap — an audible tick on
+                // every jitter hiccup (the full-empty path already gets this via
+                // consecutiveEmptyReads; the partial path did not).
                 underruns += 1
                 applyFadeOutEdge(into: base + available * Self.mixChannels, frames: frames - available)
+                fadeInPending = true
             }
         }
         addScratch(into: output, frames: frames)

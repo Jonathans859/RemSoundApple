@@ -181,6 +181,10 @@ public struct ReceiverRootView: View {
                     Text("Previously selected input").tag(String?.some(selected))
                 }
             }
+            // Explicit menu style: a pop-up button (macOS) / anchored menu (iOS) reads as
+            // one focusable "pop-up button" element under VoiceOver, instead of whatever
+            // presentation the automatic style resolves to in this Form.
+            .pickerStyle(.menu)
             .accessibilityHint("Which microphone or input to send from")
 
             if !controller.sendStatus.isEmpty {

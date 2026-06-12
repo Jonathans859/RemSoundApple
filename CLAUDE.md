@@ -84,8 +84,11 @@ These are the wire contract. Breaking any of them silently breaks interop:
     peer security status, idle prune (4 s), byte counters/uptime.
   - `StreamSession.swift` — per-stream decode (PCM/Opus+FEC), mono→stereo upmix,
     `LinearResampler` for non-48k PCM passthrough senders.
-  - `SessionPlayout.swift` — jitter buffer: arms at target latency, click-trim back to
-    target when > target + max(2 codec frames, 10 ms), cosine-faded underrun edges,
+  - `SessionPlayout.swift` — jitter buffer: arms at target latency; click-trim mirrors
+    the Windows smoothness-3 defaults — fires past target + max(4 codec frames + 4 ms,
+    15 ms) + 8 ms and trims to target + 2 codec frames + 5 ms (a cushion, NOT bare
+    target — bare-target trims caused sustained underruns on bursty VPN paths);
+    cosine-faded underrun edges (fade-in re-armed after partial reads too),
     disarms after 8 consecutive empty reads (re-arms at target). Fades are applied to a
     per-session scratch BEFORE summing — never multiply the shared mix buffer.
   - `PlayoutMixer.swift` — sums sessions, volume/mute, tanh soft limiter above 0.9.
