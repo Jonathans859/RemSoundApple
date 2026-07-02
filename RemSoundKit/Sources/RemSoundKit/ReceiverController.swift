@@ -117,6 +117,8 @@ public final class ReceiverController {
 
     private var manualPeers: [ManualPeer]
     private var selectedAddresses: Set<String>
+    /// Monotonic token guarding async PBKDF2 results — see `applyPassword`.
+    private var passwordGeneration = 0
     /// Resolved IPv4 addresses (network byte order) per manual peer id.
     private var manualResolved: [UUID: [UDPEndpoint]] = [:]
     /// Addresses currently delivering audio — drives connect/disconnect cues.
@@ -241,15 +243,28 @@ public final class ReceiverController {
     }
 
     private func applyPassword() {
-        if password.isEmpty { return }
+        // Each edit bumps the generation so a slow derivation of an older password can
+        // never land after a newer one (or after the password was cleared).
+        passwordGeneration &+= 1
+        let generation = passwordGeneration
+        guard !password.isEmpty else {
+            // No password = no key: stop decrypting and sending immediately (the engines
+            // otherwise keep running on the previously derived key).
+            engine.setKeyMaterial(key: nil, fingerprint: nil)
+            sendEngine.setKeyMaterial(key: nil, fingerprint: nil)
+            return
+        }
         // PBKDF2 at 100k iterations takes ~50-100 ms — off the main actor. Derived once,
         // shared by the receive and send engines.
         let pw = password
-        Task.detached(priority: .userInitiated) { [engine, sendEngine] in
+        Task.detached(priority: .userInitiated) { [weak self] in
             let key = RemSoundCrypto.deriveKey(password: pw)
             let fingerprint = RemSoundCrypto.fingerprint(password: pw)
-            engine.setKeyMaterial(key: key, fingerprint: fingerprint)
-            sendEngine.setKeyMaterial(key: key, fingerprint: fingerprint)
+            await MainActor.run { [weak self] in
+                guard let self, self.passwordGeneration == generation else { return }
+                self.engine.setKeyMaterial(key: key, fingerprint: fingerprint)
+                self.sendEngine.setKeyMaterial(key: key, fingerprint: fingerprint)
+            }
         }
     }
 

@@ -57,24 +57,20 @@ public enum RemPacket {
         public let type: RemPacketType
         public let streamId: UInt16
         public let sequence: UInt32
-        /// Raw type byte, kept so unknown types can be counted without crashing the enum.
-        public let rawType: UInt8
     }
 
-    /// Parses the 12-byte header. Returns nil for short packets, bad magic, or a header
-    /// version other than 1. Unknown packet *types* still parse (Header.type is nil-mapped
-    /// to nothing here — see `rawType`); the caller drops them, matching the Windows
-    /// receiver's silent-drop dispatch.
+    /// Parses the 12-byte header. Returns nil for short packets, bad magic, a header
+    /// version other than 1, or an unknown packet type — the caller drops the packet,
+    /// matching the Windows receiver's silent-drop dispatch.
     public static func readHeader(_ packet: [UInt8], length: Int) -> Header? {
         guard length >= headerSize, packet.count >= headerSize else { return nil }
         let m = UInt32(packet[0]) | UInt32(packet[1]) << 8 | UInt32(packet[2]) << 16 | UInt32(packet[3]) << 24
         guard m == magic, packet[4] == version else { return nil }
-        let rawType = packet[5]
-        guard let type = RemPacketType(rawValue: rawType) else { return nil }
+        guard let type = RemPacketType(rawValue: packet[5]) else { return nil }
         var streamId = UInt16(packet[6]) | UInt16(packet[7]) << 8
         if streamId == 0 { streamId = 1 }
         let sequence = UInt32(packet[8]) | UInt32(packet[9]) << 8 | UInt32(packet[10]) << 16 | UInt32(packet[11]) << 24
-        return Header(type: type, streamId: streamId, sequence: sequence, rawType: rawType)
+        return Header(type: type, streamId: streamId, sequence: sequence)
     }
 
     // MARK: - Format payload

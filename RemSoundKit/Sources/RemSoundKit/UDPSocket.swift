@@ -80,12 +80,6 @@ public final class UDPSocket {
         self.onDiagnostic = onDiagnostic
     }
 
-    public var isRunning: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return fd >= 0
-    }
-
     /// The locally-bound port (useful when binding port 0).
     public private(set) var boundPort: UInt16 = 0
 

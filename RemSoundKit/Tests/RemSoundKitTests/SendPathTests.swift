@@ -144,7 +144,7 @@ final class SendPathTests: XCTestCase {
                 let decoded = decoder.decode(opusBytes, frameSize: frameCount, fec: false, into: &pcm)
                 XCTAssertEqual(decoded, frameCount)
             default:
-                XCTFail("unexpected packet type \(header.rawType)")
+                XCTFail("unexpected packet type \(header.type)")
             }
         }
         XCTAssertGreaterThanOrEqual(formats, 1, "format must be announced before audio")

@@ -31,7 +31,6 @@ public final class HeartbeatService {
 
     private let lock = NSLock()
     private var peers: [UDPEndpoint: PeerState] = [:]
-    private var recentPingSources: [UInt32: Date] = [:]
     private var timer: DispatchSourceTimer?
     private let timerQueue = DispatchQueue(label: "RemSound.Heartbeat")
     private var sequence: UInt32 = 0
@@ -133,7 +132,6 @@ public final class HeartbeatService {
 
         if kind == .ping {
             lock.lock()
-            recentPingSources[remote.address] = Date()
             sequence &+= 1
             let seq = sequence
             lock.unlock()
@@ -151,23 +149,15 @@ public final class HeartbeatService {
         let now = Date()
         lock.lock()
         for (endpoint, state) in peers where endpoint.address == remote.address {
-            state.lastRttMs = rtt
             state.rttEwmaMs = state.rttEwmaMs.map { Int(Double($0) * 0.7 + Double(rtt) * 0.3) } ?? rtt
             state.lastPong = now
         }
         lock.unlock()
     }
 
-    /// True when any peer at this address has answered a ping recently — used to drive the
-    /// disconnect cue without false-firing on a single lost pong.
-    public func isAddressResponsive(_ address: UInt32) -> Bool {
-        allPeerHealth().contains { $0.audioEndpoint.address == address && $0.state == .healthy }
-    }
-
     private final class PeerState {
         var firstPingSent: Date?
         var lastPong: Date?
-        var lastRttMs: Int?
         var rttEwmaMs: Int?
     }
 }

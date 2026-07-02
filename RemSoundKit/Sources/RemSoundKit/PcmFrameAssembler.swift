@@ -60,13 +60,6 @@ public final class PcmFrameAssembler {
         }
         return nil
     }
-
-    public func reset() {
-        pendingFrameId = 0
-        pendingPartIndex = 0
-        pendingTotalParts = 0
-        assemblyWritten = 0
-    }
 }
 
 /// Packed signed 24-bit little-endian PCM → float conversion (the PCM wire format).
