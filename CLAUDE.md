@@ -1,8 +1,7 @@
 # CLAUDE.md — RemSoundApple
 
 iOS/macOS companion app (receive + microphone send) for the Windows **RemSound** app
-(https://github.com/Ednunp/RemSound). Reference clone of the Windows source:
-`C:\Users\jonathan\gitkeep\Ednunp\RemSound` — protocol truth lives in
+(https://github.com/Ednunp/RemSound). Protocol truth lives in that repo:
 `src/RemSound.Core/RemPacket.cs`, `RemSoundCrypto.cs`, `PeerDiscoveryService.cs`,
 `HeartbeatService.cs`; receiver behaviour in `src/RemSound.Receiver/`. When in doubt about
 wire behaviour, read the C# — it is the spec.
@@ -115,12 +114,12 @@ These are the wire contract. Breaking any of them silently breaks interop:
   playback). macOS is a `MenuBarExtra` (LSUIElement); the **label view's `.task`** is the
   app-did-launch hook — content views only appear when the menu opens.
 
-## Build / CI workflow (important — this machine is Windows)
+## Build / CI workflow (important — development happens on Windows)
 
-- **Nothing here can compile Swift.** Validation happens on GitHub Actions
+- **The dev machine cannot compile Swift.** Validation happens on GitHub Actions
   (`.github/workflows/build.yml`: swift test + unsigned iOS/macOS builds, macos-15 runner).
-- `gh` CLI is **not installed** and the user doesn't want API polling. They download the
-  Actions logs and drop them in the repo root as `logs_<run-id>/` folders (gitignored).
+- Do not poll the GitHub API for CI results. Downloaded Actions logs are dropped in the
+  repo root as `logs_<run-id>/` folders (gitignored).
   Read failures from `logs_*/<job name>/<step>.txt`.
 - **Commit, but do not `git push` unless asked** — the user pushes themselves.
 - Line endings: repo is checked out with core.autocrlf; the LF→CRLF warnings on commit are
