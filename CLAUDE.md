@@ -118,9 +118,8 @@ These are the wire contract. Breaking any of them silently breaks interop:
 
 - **The dev machine cannot compile Swift.** Validation happens on GitHub Actions
   (`.github/workflows/build.yml`: swift test + unsigned iOS/macOS builds, macos-15 runner).
-- Do not poll the GitHub API for CI results. Downloaded Actions logs are dropped in the
-  repo root as `logs_<run-id>/` folders (gitignored).
-  Read failures from `logs_*/<job name>/<step>.txt`.
+- For CI results, ask for the Actions logs to be provided, or read them via the `gh` CLI
+  if it is installed. Do not poll the GitHub API.
 - **Commit, but do not `git push` unless asked** — the user pushes themselves.
 - Line endings: repo is checked out with core.autocrlf; the LF→CRLF warnings on commit are
   normal, ignore them.
