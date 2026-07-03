@@ -16,6 +16,9 @@ doubt read `src/RemSound.Core/` (`RemPacket.cs`, `RemSoundCrypto.cs`, `PeerDisco
   edits. Adding a file to an app target instead requires hand-editing the hand-written
   `RemSound.xcodeproj/project.pbxproj` (PBXBuildFile + PBXFileReference + group + Sources
   phase). Prefer the package.
+- To check whether the Windows repo changed the protocol since the last review, use the
+  `upstream-protocol-sync` skill (`.claude/skills/upstream-protocol-sync/`) — it tracks the
+  last-scanned upstream commit and says which files matter.
 
 ## Wire contract — breaking any of these silently breaks Windows interop
 
@@ -102,4 +105,6 @@ doubt read `src/RemSound.Core/` (`RemPacket.cs`, `RemSoundCrypto.cs`, `PeerDisco
   is a `MenuBarExtra` (LSUIElement) whose **label view's `.task`** is the launch hook.
 
 Known v1 simplifications (intentional): linear resampler for non-48k PCM senders, no drift
-resampler, no PCM send, no macOS loopback capture (virtual input devices cover it).
+resampler (upstream v3.9.1 also added buffer-depth feedback to theirs — port both together
+if drift ever becomes audible), no PCM send, no macOS loopback capture (virtual input
+devices cover it).
