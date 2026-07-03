@@ -19,6 +19,9 @@ doubt read `src/RemSound.Core/` (`RemPacket.cs`, `RemSoundCrypto.cs`, `PeerDisco
 - To check whether the Windows repo changed the protocol since the last review, use the
   `upstream-protocol-sync` skill (`.claude/skills/upstream-protocol-sync/`) — it tracks the
   last-scanned upstream commit and says which files matter.
+- Releases/TestFlight: use the `release` skill (`.claude/skills/release/`). Publishing a
+  GitHub Release `vX.Y.Z` triggers `.github/workflows/release.yml` (signed IPA →
+  TestFlight, notes = release body). One-time setup steps live in `plan.md`.
 
 ## Wire contract — breaking any of these silently breaks Windows interop
 
