@@ -23,10 +23,23 @@ the Actions logs.
 
 2. **Find your Team ID**: developer.apple.com → Membership details → 10-character Team ID.
 
-3. **Register the App ID**: developer.apple.com → Certificates, Identifiers & Profiles →
-   Identifiers → “+” → App IDs → App → Bundle ID **explicit** `com.jonathan859.remsound.ios`,
-   description "RemSound iOS". No extra capabilities needed (background audio is an
-   Info.plist mode, not a capability; we deliberately do NOT request multicast).
+3. **Decide the bundle ID, then register the App ID**. The iOS bundle ID does NOT have to
+   carry a `.ios` suffix — `com.jonathan859.remsound` works fine and is the recommendation:
+   - Bundle IDs only need to be unique **per app record**, and iOS and macOS are separate
+     records by default, so iOS `com.jonathan859.remsound` + macOS
+     `com.jonathan859.remsound.mac` coexist without any conflict.
+   - Bonus: if the macOS app ever goes to the Mac App Store and you want it to be the
+     *same product* (one app record, "universal purchase"), Apple requires both platforms
+     to share ONE bundle ID — so the suffix-free name on iOS keeps that door open (the
+     macOS ID would then be renamed to match, cheap while it ships as an unsigned zip).
+   - If you confirm the rename, Claude updates `PRODUCT_BUNDLE_IDENTIFIER` in the pbxproj
+     and the locked-decision note in CLAUDE.md; register the App ID only after that
+     decision so the portal matches the project.
+
+   Then: developer.apple.com → Certificates, Identifiers & Profiles → Identifiers → “+” →
+   App IDs → App → **explicit** bundle ID (the one you chose), description "RemSound".
+   No extra capabilities needed (background audio is an Info.plist mode, not a
+   capability; we deliberately do NOT request multicast).
 
 4. **Create an Apple Distribution certificate** (Windows-friendly, no Mac needed):
    - In Git Bash: generate a private key + certificate signing request:
@@ -49,12 +62,30 @@ the Actions logs.
    Note the **Key ID** and **Issuer ID**, download the `.p8` file (one chance only).
 
 6. **Create the app record**: App Store Connect → Apps → “+” → New App → iOS,
-   name "RemSound" (or "RemSound Receiver" if taken), primary language, bundle ID
-   `com.jonathan859.remsound.ios`, any SKU (e.g. `remsound-ios`).
+   name "RemSound" (or "RemSound Receiver" if taken), primary language, the bundle ID you
+   registered, any SKU (e.g. `remsound-ios`).
 
 7. **TestFlight internal group**: in the app → TestFlight → Internal Testing → create a
    group (e.g. "Core") with automatic distribution and add yourself. Internal testers need
-   no review; builds appear as soon as processing finishes.
+   no review; builds appear as soon as processing finishes. Use this for the first builds
+   even though the goal is external testing — it proves the pipeline without review delays.
+   (Internal testers must be App Store Connect users on your account — you can invite up
+   to 100 via Users and Access, also on an individual membership.)
+
+8. **External testers (wanted)** — one-time prerequisites in App Store Connect:
+   - App → App Information / TestFlight → fill in **Beta App Information**: feedback
+     email, a **privacy policy URL** (required for external TestFlight), and Beta App
+     Review contact details.
+   - TestFlight → External Testing → create a group (e.g. "Beta"), add testers by email
+     or enable a **public link** (up to 10 000 testers).
+   - The **first build** you add to an external group goes through **Beta App Review**
+     (usually hours to ~1 day; describe what the app does and that it needs a Windows
+     RemSound peer — offer the public relay hostname as the way reviewers can see it
+     connect, or state clearly that audio requires a second machine). Later builds of the
+     same version usually skip re-review; new marketing versions get a (fast) re-review.
+   - Distribution to external groups is a manual click per build by default (TestFlight →
+     build → add to the external group). Keep that manual — you decide which builds the
+     public sees; internal group gets every build automatically.
 
 ## Phase 2 — GitHub repository secrets (you, ~10 min)
 
@@ -76,11 +107,17 @@ Repo → Settings → Secrets and variables → Actions → New repository secre
    1024×1024 PNG (no alpha) and Claude wires up `Apps/iOS/Assets.xcassets` (single-size
    icon), the pbxproj resources phase, and `ASSETCATALOG_COMPILER_APPICON_NAME`.
 
-2. **Export compliance**: the app uses Apple's standard AES-GCM (CryptoKit). To keep
-   TestFlight from asking the encryption question on every build, add
-   `ITSAppUsesNonExemptEncryption` = `false` (standard-algorithms exemption) to
-   `Apps/iOS/Info.plist` — confirm you're comfortable with that declaration for your
-   jurisdiction first (France has extra rules), then Claude adds it.
+2. **Export compliance** (verified against Apple's docs 2026-07-03): the plist shortcut
+   `ITSAppUsesNonExemptEncryption = false` is documented for apps whose only encryption
+   is OS-standard protocol use (e.g. HTTPS via URLSession). RemSound does its own
+   end-to-end audio encryption — via Apple's CryptoKit/CommonCrypto, but for a custom
+   protocol — so the honest declaration is: **uses encryption: yes; only standard
+   algorithms (no proprietary crypto): yes**. Practical setup:
+   - Answer the encryption questions **once at app level** in App Store Connect (App
+     Information → App Encryption Documentation) so builds don't prompt individually.
+   - File the annual **BIS self-classification report** (due Feb 1 each year — a short
+     spreadsheet email; mass-market standard-crypto apps qualify for this simple route).
+   - France requires an extra declaration if you distribute there.
 
 3. Nothing else: versions are already wired (`CFBundleShortVersionString` =
    `$(MARKETING_VERSION)`, `CFBundleVersion` = `$(CURRENT_PROJECT_VERSION)`), so the
@@ -110,10 +147,28 @@ Repo → Settings → Secrets and variables → Actions → New repository secre
 - **macOS**: TestFlight for macOS is possible too (needs Developer ID / Mac App Store
   signing decisions + sandbox review for the network client entitlement) — separate plan
   when wanted; the unsigned zip from `build.yml` stays the macOS distribution meanwhile.
-- **External TestFlight testers**: needs a Beta App Review pass and privacy details in
-  App Store Connect; internal testing needs neither.
-- Screenshots, App Privacy questionnaire, and the App Store listing only matter when you
-  go beyond TestFlight.
+- Screenshots, the full App Privacy questionnaire, and the App Store listing only matter
+  for an actual App Store release, not TestFlight.
+
+## Verification notes (researched 2026-07-03)
+
+The mechanics above were checked against current Apple/GitHub/fastlane documentation:
+
+- Confirmed: the keychain-import steps match GitHub's official macOS-runner signing guide
+  (including `base64 --decode -o`); fastlane is preinstalled on `macos-15` runners
+  (default Xcode 16.4, fine for the iOS 18 target); `method = app-store-connect` is the
+  current export method name (`app-store` is deprecated); pilot's `--changelog` sets
+  "What to Test" once the build appears in App Store Connect; internal TestFlight is
+  limited to App Store Connect users (max 100), external to 10 000 with Beta App Review
+  on the first build per version.
+- Fixed after verification: build numbers now include the run **attempt**
+  (`run_number.run_attempt`) because re-running a failed workflow keeps the same
+  run_number — a re-run after a partially-successful upload would otherwise collide;
+  pilot now passes `--skip_waiting_for_build_processing` alongside the changelog (waits
+  only until the build appears, then exits); the export-compliance guidance above was
+  tightened from "declare false" to the yes-with-standard-algorithms declaration.
+- Watch item: GitHub is migrating `macos-latest` to macOS 26 (mid-2026); the workflows
+  pin `macos-15` deliberately — revisit the pin when GitHub announces its retirement.
 
 ## First-release checklist (condensed)
 

@@ -41,9 +41,11 @@ jobs:
             exit 1
           fi
           echo "marketing=$VERSION" >> "$GITHUB_OUTPUT"
-          # Build numbers must only ever increase; the workflow run number is monotonic
-          # across all releases (and retries bump it too).
-          echo "build=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          # Build numbers must only ever increase and be unique per marketing version.
+          # run_number is monotonic across releases but does NOT change on a re-run —
+          # the run_attempt suffix keeps a re-run unique when a previous attempt already
+          # uploaded its build before failing on a later step.
+          echo "build=${{ github.run_number }}.${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
 
       - name: Import distribution certificate into a throwaway keychain
         env:
@@ -118,13 +120,15 @@ jobs:
           jq -n --arg kid "$API_KEY_ID" --arg iss "$API_ISSUER_ID" --arg key "$API_PRIVATE_KEY" \
             '{key_id: $kid, issuer_id: $iss, key: $key, duration: 1200, in_house: false}' \
             > "$RUNNER_TEMP/asc/api_key.json"
-          # pilot waits for App Store Connect processing so it can set the changelog
-          # ("What to Test") on the build — this step legitimately takes 5–15 minutes.
+          # changelog + skip_waiting together: pilot waits only until the build APPEARS
+          # in App Store Connect, sets "What to Test", then skips the rest of the
+          # processing wait — still takes a few minutes, but not the full 5–15.
           if [ -n "$RELEASE_NOTES" ]; then
             fastlane pilot upload \
               --ipa "RemSound-iOS-$TAG.ipa" \
               --api_key_path "$RUNNER_TEMP/asc/api_key.json" \
-              --changelog "$RELEASE_NOTES"
+              --changelog "$RELEASE_NOTES" \
+              --skip_waiting_for_build_processing true
           else
             fastlane pilot upload \
               --ipa "RemSound-iOS-$TAG.ipa" \
