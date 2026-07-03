@@ -1,166 +1,105 @@
 # CLAUDE.md — RemSoundApple
 
 iOS/macOS companion app (receive + microphone send) for the Windows **RemSound** app
-(https://github.com/Ednunp/RemSound). Protocol truth lives in that repo:
-`src/RemSound.Core/RemPacket.cs`, `RemSoundCrypto.cs`, `PeerDiscoveryService.cs`,
-`HeartbeatService.cs`; receiver behaviour in `src/RemSound.Receiver/`. When in doubt about
-wire behaviour, read the C# — it is the spec.
+(https://github.com/Ednunp/RemSound). The C# in that repo is the wire-protocol spec — when in
+doubt read `src/RemSound.Core/` (`RemPacket.cs`, `RemSoundCrypto.cs`, `PeerDiscoveryService.cs`,
+`HeartbeatService.cs`) and `src/RemSound.Receiver/`.
 
-## Hard constraints (do not change without checking the Windows source)
+## Build workflow (read this first — development happens on Windows)
 
-These are the wire contract. Breaking any of them silently breaks interop:
+- **This machine cannot compile Swift.** Validation happens only on GitHub Actions
+  (`.github/workflows/build.yml`: swift test + unsigned iOS/macOS builds). For CI results,
+  ask for the Actions logs or read them via `gh` if installed — never poll the GitHub API.
+- **Commit, but never `git push` unless asked** — the user pushes. LF→CRLF warnings on
+  commit are normal; ignore them.
+- Put new code in `RemSoundKit/Sources/**` — SPM picks those files up with **no** project
+  edits. Adding a file to an app target instead requires hand-editing the hand-written
+  `RemSound.xcodeproj/project.pbxproj` (PBXBuildFile + PBXFileReference + group + Sources
+  phase). Prefer the package.
 
-- **Header**: 12 bytes LE — magic `RMND` (0x444E4D52 LE), version **1** (reject everything
-  else; relay v2 "lobby" headers are version 2 and out of scope), type, uint16 streamId
-  (0 coerces to 1), uint32 sequence. Single canonical UDP port **47830** for audio +
-  heartbeat ("single-port model"); discovery on **47821**.
-- **Format payload**: accept 32 (legacy), 36 (+lane byte @32), 44 (+8-byte password
-  fingerprint @36) bytes. Field @28 is `frameSamplesPerChannel` — a **sample count**, not
-  milliseconds (v3.0 change). Unknown lane values clamp to `.mixed`, never reject.
-- **Crypto** (`RemSoundCrypto.swift`, mirrors C# exactly): PBKDF2-HMAC-SHA256, **100 000**
-  iterations, salts `"RemSound.v1.audio-key"` (32-byte key) and `"RemSound.v1.fingerprint"`
-  (8-byte fingerprint). AES-256-GCM packet layout **`nonce(12) ‖ tag(16) ‖ ciphertext`**
-  (CryptoKit's `combined` is nonce‖ct‖tag — do NOT use it). Cross-impl PBKDF2 vectors are
-  pinned in `CryptoTests.swift` (generated with Python `hashlib.pbkdf2_hmac`); if those fail,
+## Wire contract — breaking any of these silently breaks Windows interop
+
+- **Header**: 12 bytes LE — magic `RMND`, version **1** (reject all else), type, uint16
+  streamId (0 coerces to 1), uint32 sequence. One UDP port **47830** for audio + heartbeat;
+  discovery on **47821**.
+- **Format payload**: accept 32 / 36 (+lane byte @32) / 44 (+8-byte password fingerprint @36)
+  bytes. Field @28 is `frameSamplesPerChannel` — a **sample count, not milliseconds**.
+  Unknown lane values clamp to `.mixed`, never reject.
+- **Crypto**: PBKDF2-HMAC-SHA256, **100 000** iterations, salts `"RemSound.v1.audio-key"`
+  (32-byte key) / `"RemSound.v1.fingerprint"` (8 bytes). AES-256-GCM packet layout is
+  **`nonce(12) ‖ tag(16) ‖ ciphertext`** — CryptoKit's `combined` is nonce‖ct‖tag, do NOT
+  use it. Cross-impl PBKDF2 vectors are pinned in `CryptoTests.swift`; if they fail,
   interop is broken.
-- **PCM path**: sender encrypts the whole int24-LE frame, then splits into ≤1454-byte parts
-  with a 6-byte sub-header (frameId/partIndex/totalParts) → receiver reassembles **then**
-  decrypts. Parts must arrive in order; missing part = drop whole frame.
-- **Opus path**: per-packet decrypt → libopus decode; on a single-packet sequence gap,
-  decode the next packet with `decode_fec=1` first (inband FEC recovery), then normally.
-  Frame size floor 120 samples (2.5 ms RESTRICTED_LOWDELAY minimum).
-- **Discovery JSON**: keys are PascalCase and matched **case-sensitively** by
-  System.Text.Json on Windows: `InstanceId`, `Name`, `AudioPort`, `CanSend`, `CanReceive`.
-  1.5 s announce cadence, 8 s peer expiry, broadcast + unicast (unicast is what crosses
-  VPNs; receiving an announcement auto-adds the source IP to unicast targets — this
-  bidirectional auto-learn is what makes iOS discovery work without broadcast).
-- **Heartbeat**: 1 Hz ping, streamId 0xFFFF, payload = kind byte + int64 LE originator
-  monotonic ms echoed verbatim in the pong (RTT needs no clock sync). Pongs are matched to
-  peers **by IP only** (source port is the peer's ephemeral/NAT port). Heartbeats from our
-  side leave the **same socket** the audio arrives on — that NAT pinhole is also what
-  claims our slot on the public relay (v1 pairwise reflector mode; just add the relay
-  hostname as a manual peer, no extra protocol).
-- **Allow-list**: audio/format packets are gated by source **IP** (not port). Sessions are
-  keyed (endpoint, streamId); the sender rotates streamId on codec change/restart — on a
-  new streamId, supersede old sessions from the same peer **only if the lane matches**
-  (BothIndependent senders run two concurrent lanes per peer).
+- **PCM**: whole int24-LE frame encrypted, then split into ≤1454-byte parts with a 6-byte
+  sub-header → reassemble **then** decrypt; parts arrive in order, missing part = drop frame.
+- **Opus**: per-packet decrypt → libopus decode; on a single-packet gap decode the next
+  packet with `decode_fec=1` first. Frame-size floor 120 samples.
+- **Discovery JSON**: PascalCase keys, matched **case-sensitively** by Windows
+  (`InstanceId`, `Name`, `AudioPort`, `CanSend`, `CanReceive`). 1.5 s announce, 8 s expiry.
+  Unicast is what crosses VPNs; receiving an announcement auto-adds the source IP as a
+  unicast target — that auto-learn is how iOS discovery works without broadcast.
+- **Heartbeat**: 1 Hz ping, streamId 0xFFFF, payload = kind byte + int64 LE monotonic ms
+  echoed verbatim in the pong. Pongs match peers **by IP only**. Heartbeats leave the same
+  socket audio arrives on (shared NAT pinhole; also claims our relay slot).
+- **Allow-list**: gate audio/format by source **IP**, not port. Sessions keyed
+  (endpoint, streamId); on a new streamId from the same peer, supersede old sessions
+  **only if the lane matches** (BothIndependent senders run two lanes per peer).
 
-## Locked product decisions (user-confirmed 2026-06-10; sending added 2026-06-12)
+## Locked product decisions (do not revisit)
 
-- v3.x protocol only; no legacy, no relay-v2 lobby, no recording.
-- **Microphone sending** (added 2026-06-12): Opus-only (no PCM send path), single mixed
-  lane, 48 kHz stereo, 192 kbps — mirrors the Windows Opus sender settings exactly
-  (RESTRICTED_LOWDELAY, complexity 10, VBR, inband FEC, 10 % loss bias). Sends to the
-  *selected* peers (one endpoint per peer — best heartbeat path; never two paths of the
-  same machine, that would double its sessions). Outbound audio leaves the receiver's
-  audio socket (shared NAT pinhole). The send toggle is deliberately NOT persisted — the
-  mic never goes hot at launch. macOS captures *input devices only*; output/loopback
-  capture is delegated to virtual devices (Loopback/BlackHole) appearing as inputs.
-- iOS 18 / macOS 15 minimum; app name "RemSound"; bundle ids
-  `com.jonathan859.remsound.ios` / `.mac`.
-- Single config (no Windows-style profiles). Password in Keychain.
-- Extras: connect/disconnect cue sounds only (`Resources/*.wav`, taken from the Windows
-  repo). Remote-volume Control packets (type 5) are parsed and **ignored**.
-- Opus via SPM package `alta/swift-opus` pinned `exact: "0.0.2"` (raw `Copus` C API needed
-  for the FEC flag — Apple's AudioConverter Opus decoder has no FEC API).
-- **Screen-reader accessibility is the top priority.** Every control labeled, status lines
-  are plain sentences, audio-start/stop fires cues + a VoiceOver announcement (iOS).
-- Hand-written `RemSound.xcodeproj` (objectVersion 60, local-package reference). If you add
-  a source file to an app target, you must hand-edit `project.pbxproj` (PBXBuildFile +
-  PBXFileReference + group + Sources phase). Files inside `RemSoundKit/Sources/**` need
-  **no** pbxproj edits — SPM picks them up automatically. Prefer putting code in the package.
-
-## Architecture map
-
-- `RemSoundKit/Sources/RemSoundKit/` — everything shared:
-  - `RemPacket.swift`, `AudioFormatInfo.swift` — wire codec.
-  - `RemSoundCrypto.swift` — PBKDF2/AES-GCM + `AudioDecryptor` (network-thread only) +
-    `AudioEncryptor` (capture-thread only; emits the wire's nonce‖tag‖ct layout).
-  - `UDPSocket.swift` — BSD-socket wrapper, one blocking-recv thread (.userInteractive),
-    IPv4 only (matches Windows); also interface enumeration for broadcast addresses.
-  - `PeerDiscoveryService.swift`, `HeartbeatService.swift` — see contract above.
-  - `AudioReceiverEngine.swift` — socket owner, packet dispatch, session table, allow-list,
-    peer security status, idle prune (4 s), byte counters/uptime.
-  - `StreamSession.swift` — per-stream decode (PCM/Opus+FEC), mono→stereo upmix,
-    `LinearResampler` for non-48k PCM passthrough senders.
-  - `SessionPlayout.swift` — jitter buffer: arms at target latency; click-trim mirrors
-    the Windows smoothness-3 defaults — fires past target + max(4 codec frames + 4 ms,
-    15 ms) + 8 ms and trims to target + 2 codec frames + 5 ms (a cushion, NOT bare
-    target — bare-target trims caused sustained underruns on bursty VPN paths);
-    cosine-faded underrun edges (fade-in re-armed after partial reads too),
-    disarms after 8 consecutive empty reads (re-arms at target). Fades are applied to a
-    per-session scratch BEFORE summing — never multiply the shared mix buffer.
-  - `PlayoutMixer.swift` — sums sessions, volume/mute, tanh soft limiter above 0.9.
-  - `AudioOutput.swift` — AVAudioEngine + AVAudioSourceNode; iOS session handling
-    (interruption / media-services reset / route change), reports output latency.
-  - `ReceiverController.swift` — @MainActor @Observable façade; 1 Hz refresh tick drives
-    peer rows, cues, and the `connectionDetails` status lines.
-  - `AudioSendEngine.swift` — outbound stream (one Windows `SenderLane`, Opus-only):
-    accumulate 10 ms frames → encode → encrypt → emit to targets; format re-announce
-    every 250 ms; random streamId per start; no key or no targets ⇒ sends nothing.
-  - `OpusStreamEncoder.swift` — libopus encoder via `RemOpusShim` (separate C target in
-    the package: `opus_encoder_ctl` is C-variadic, Swift can't call it; the shim exposes
-    fixed-signature wrappers and depends on swift-opus's `Copus` product).
-  - `MicrophoneCapture.swift` — input capture + enumeration/selection. Captures via
-    AVAudioSinkNode (realtime, ~5 ms hardware quanta) → `CaptureRingBuffer.swift`
-    (lock-free SPSC, `Synchronization.Atomic`) → drain thread forwarding 10 ms units, so
-    outbound packets pace ~every 10 ms (NOT installTap — see pitfall 7). iOS:
-    AVAudioSession ports + built-in-mic data sources; macOS: Core Audio input devices set
-    on the input unit. Converts hardware format → 48 kHz interleaved stereo float (mono
-    duplicated into both channels — the converter's default 1→2 mapping is not trusted).
-    Rebuilds itself on `AVAudioEngineConfigurationChange`.
-  - `Settings.swift` — UserDefaults + Keychain. `ReceiverRootView.swift` — shared SwiftUI.
-- `Apps/iOS`, `Apps/macOS` — thin entry points. iOS has `audio` background mode (lock-screen
-  playback). macOS is a `MenuBarExtra` (LSUIElement); the **label view's `.task`** is the
-  app-did-launch hook — content views only appear when the menu opens.
-
-## Build / CI workflow (important — development happens on Windows)
-
-- **The dev machine cannot compile Swift.** Validation happens on GitHub Actions
-  (`.github/workflows/build.yml`: swift test + unsigned iOS/macOS builds, macos-15 runner).
-- For CI results, ask for the Actions logs to be provided, or read them via the `gh` CLI
-  if it is installed. Do not poll the GitHub API.
-- **Commit, but do not `git push` unless asked** — the user pushes themselves.
-- Line endings: repo is checked out with core.autocrlf; the LF→CRLF warnings on commit are
-  normal, ignore them.
+- v3.x protocol only; no legacy, no relay-v2 lobby, no recording, no profiles.
+- Mic send: Opus-only, one mixed lane, 48 kHz stereo 192 kbps (RESTRICTED_LOWDELAY,
+  complexity 10, VBR, FEC, 10 % loss bias) — mirrors the Windows sender. One endpoint per
+  selected peer (two paths of one machine would double its sessions). Outbound audio uses
+  the receiver's socket. The send toggle is deliberately NOT persisted — the mic never goes
+  hot at launch.
+- iOS 18 / macOS 15 minimum; bundle ids `com.jonathan859.remsound.ios` / `.mac`.
+- Password in Keychain. Control packets (type 5) parsed and ignored.
+- Opus via SPM `alta/swift-opus` pinned `exact: "0.0.2"` (raw C API needed for the FEC flag).
+- **Screen-reader accessibility is the top priority**: every control labeled, status lines
+  are plain sentences, audio start/stop fires cues + a VoiceOver announcement (iOS).
 
 ## Pitfalls already hit (don't re-learn these)
 
-1. **AVAudioEngine NSException on connect** — mixer nodes reject *interleaved* formats with
-   an Objective-C exception Swift cannot catch (crashed the iOS app at launch). Source node
-   must use `AVAudioFormat(standardFormatWithSampleRate:channels:)` (deinterleaved); render
-   into an interleaved scratch and split planes (see `AudioOutput.start`).
-2. **`opus_decode` imports with a non-optional output pointer** — pass
-   `pcm.baseAddress!`, not the optional.
-3. `Set(json?.keys ?? [])` doesn't type-check (`Dictionary.Keys` vs `[Any]`) — unwrap first.
-4. CommonCrypto PBKDF2: empty password must still pass a **non-NULL** pointer with length 0
-   (Windows treats no-password as "" and both sides must derive identical bytes).
-5. iOS restricts UDP **broadcast** (multicast entitlement, needs Apple approval). Do not
-   "fix" discovery by relying on broadcast — the unicast auto-learn path is the supported
-   mechanism on iOS; manual peer entry seeds it.
-6. **Never poll audio-input hardware on a timer.** The first send UI refreshed
-   `availableInputs()` on the 1 Hz tick; AVAudioSession / Core Audio HAL enumeration is
-   audio-server IPC and produced steady once-a-second crackling in live playback. Inputs
-   are refreshed only on route-change / device-list notifications (`onInputsChanged`).
-7. **iOS clamps `installTap` buffers to ~100 ms** no matter what bufferSize you request or
-   what the session IO-buffer preference says. The first mic-send capture used a tap and
-   fired ten 10 ms Opus packets back-to-back every 100 ms — the Windows receiver saw it
-   as 100 ms network jitter and needed a ~200 ms buffer. Low-latency capture must use
-   `AVAudioSinkNode` (realtime block → lock-free ring → drain thread).
-8. **Multi-homed peers (LAN + Tailscale) announce from several source IPs.** The Windows
-   one-address-per-InstanceId model makes the stored peer flap between paths every
-   announcement — never key UI row identity, the allow-list, or heartbeat tracking on a
-   single address. `PeerAnnouncement.addresses` keeps all live paths (primary = first
-   seen); selection/allow/track must cover ALL of them (`PeerDiscoveryTests` pins this).
+1. AVAudioEngine mixer nodes throw an uncatchable NSException on *interleaved* connection
+   formats — source nodes must use `standardFormatWithSampleRate:` (deinterleaved) and
+   split planes from an interleaved scratch (see `AudioOutput.start`).
+2. `opus_decode` imports with a non-optional output pointer — pass `pcm.baseAddress!`.
+3. CommonCrypto PBKDF2: an empty password must still pass a **non-NULL** pointer with
+   length 0 (both sides treat no-password as "" and must derive identical bytes).
+4. iOS restricts UDP **broadcast** (needs a multicast entitlement). Never "fix" discovery
+   with broadcast — unicast auto-learn is the iOS mechanism; manual peer entry seeds it.
+5. **Never poll audio-input hardware on a timer** — AVAudioSession / HAL enumeration is
+   audio-server IPC and causes audible crackling. Refresh inputs only on route-change /
+   device-list notifications (`onInputsChanged`).
+6. iOS clamps `installTap` buffers to ~100 ms regardless of the requested size. Low-latency
+   capture must use `AVAudioSinkNode` → lock-free ring → drain thread (as implemented).
+7. Multi-homed peers (LAN + Tailscale) announce from several source IPs. Never key row
+   identity, allow-list, or heartbeat tracking on a single address —
+   `PeerAnnouncement.addresses` keeps all paths; selection/allow/track must cover ALL
+   (`PeerDiscoveryTests` pins this).
+8. Jitter-buffer click-trim must keep a cushion ABOVE target latency, never trim to bare
+   target (causes sustained underruns on bursty VPN paths) — see `SessionPlayout.write`.
 
-## Known v1 simplifications (intentional, candidates for later)
+## Architecture (everything shared lives in `RemSoundKit/Sources/RemSoundKit/`)
 
-- No fixed-ratio drift resampler (Windows Phase-4 design); clock drift is bounded by
-  click-trim + re-arm. Upgrade only if long sessions produce audible periodic fades.
-- `LinearResampler` (linear interpolation) for non-48 kHz PCM senders; Windows uses WDL.
-- Control packets ignored; no per-route latency (single output, lanes are mixed).
-- No recording, no profiles, no auto-update.
-- Send path: no PCM send, no multi-source mixing, no macOS output-device (loopback)
-  capture — virtual input devices (Loopback/BlackHole) cover that. iOS holds
-  `.playAndRecord` only while sending (Bluetooth output drops to the bidirectional link's
-  quality while the AirPods mic is in use — expected, not a bug).
+- Wire codec: `RemPacket.swift`, `AudioFormatInfo.swift`. Crypto: `RemSoundCrypto.swift`
+  (`AudioDecryptor` network-thread only; `AudioEncryptor` capture-thread only).
+- Network: `UDPSocket.swift` (BSD, IPv4 only, one blocking-recv thread),
+  `PeerDiscoveryService.swift`, `HeartbeatService.swift`.
+- Receive path: `AudioReceiverEngine.swift` (socket owner, dispatch, sessions, allow-list)
+  → `StreamSession.swift` (decode) → `SessionPlayout.swift` (jitter buffer, fades — fades
+  shape a per-session scratch BEFORE summing, never the shared mix buffer) →
+  `PlayoutMixer.swift` (sum, volume, limiter) → `AudioOutput.swift` (AVAudioEngine +
+  iOS session handling).
+- Send path: `MicrophoneCapture.swift` (sink node → `CaptureRingBuffer.swift` → drain
+  thread, 10 ms units; mono duplicated to both channels) → `AudioSendEngine.swift`
+  (accumulate → Opus encode → encrypt → targets; format re-announce every 250 ms) via
+  `OpusStreamEncoder.swift` (`RemOpusShim` C target wraps variadic `opus_encoder_ctl`).
+- App layer: `ReceiverController.swift` (@MainActor façade, 1 Hz refresh tick),
+  `ReceiverRootView.swift` (shared SwiftUI), `Settings.swift` (UserDefaults + Keychain).
+- `Apps/iOS`, `Apps/macOS`: thin entry points. iOS has the `audio` background mode; macOS
+  is a `MenuBarExtra` (LSUIElement) whose **label view's `.task`** is the launch hook.
+
+Known v1 simplifications (intentional): linear resampler for non-48k PCM senders, no drift
+resampler, no PCM send, no macOS loopback capture (virtual input devices cover it).

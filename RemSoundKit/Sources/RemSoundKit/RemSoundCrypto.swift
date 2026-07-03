@@ -74,32 +74,42 @@ public enum RemSoundCrypto {
     }
 }
 
+/// Rebuilds a `SymmetricKey` only when the raw key bytes actually change (cheap comparison
+/// on the common no-change path). Shared by `AudioEncryptor` / `AudioDecryptor`; each owner
+/// uses its cache from a single thread.
+struct SymmetricKeyCache {
+    private(set) var key: SymmetricKey?
+    private var keyBytesCached: [UInt8]?
+
+    mutating func ensure(_ keyBytes: [UInt8]?) {
+        if keyBytesCached == keyBytes { return }
+        keyBytesCached = keyBytes
+        key = keyBytes.map { SymmetricKey(data: $0) }
+    }
+}
+
 /// Encrypts outgoing audio payloads — the send-side mirror of `AudioDecryptor`, matching the
 /// Windows `SenderLane` cipher. Packet layout is the wire contract's
 /// `nonce(12) || tag(16) || ciphertext`; CryptoKit's `combined` representation is
 /// nonce || ciphertext || tag, so the pieces are emitted explicitly. Used exclusively on the
 /// capture/encode thread.
 public final class AudioEncryptor {
-    private var key: SymmetricKey?
-    private var keyBytesCached: [UInt8]?
+    private var keyCache = SymmetricKeyCache()
 
     public init() {}
 
-    public var hasKey: Bool { key != nil }
+    public var hasKey: Bool { keyCache.key != nil }
 
-    /// Rebuild the cipher key if the raw key bytes changed. Cheap comparison on the
-    /// common no-change path.
+    /// Rebuild the cipher key if the raw key bytes changed.
     public func ensureKey(_ keyBytes: [UInt8]?) {
-        if keyBytesCached == keyBytes { return }
-        keyBytesCached = keyBytes
-        key = keyBytes.map { SymmetricKey(data: $0) }
+        keyCache.ensure(keyBytes)
     }
 
     /// Encrypt a plaintext into the `nonce(12) || tag(16) || ciphertext` wire layout.
     /// Nil when no key is set (no password — mandatory encryption means nothing is sent)
     /// or on a CryptoKit failure.
     public func tryEncrypt(_ plaintext: ArraySlice<UInt8>) -> [UInt8]? {
-        guard let key else { return nil }
+        guard let key = keyCache.key else { return nil }
         guard let box = try? AES.GCM.seal(Data(plaintext), using: key) else { return nil }
         var packet = [UInt8]()
         packet.reserveCapacity(plaintext.count + RemSoundCrypto.encryptionOverheadBytes)
@@ -115,24 +125,20 @@ public final class AudioEncryptor {
 /// exclusively on the network receive thread. Returns nil on auth failure (wrong password /
 /// tampered packet) — the caller drops the packet, producing silence, never garbage.
 public final class AudioDecryptor {
-    private var key: SymmetricKey?
-    private var keyBytesCached: [UInt8]?
+    private var keyCache = SymmetricKeyCache()
 
     public init() {}
 
-    public var hasKey: Bool { key != nil }
+    public var hasKey: Bool { keyCache.key != nil }
 
-    /// Rebuild the cipher key if the raw key bytes changed. Cheap comparison on the
-    /// common no-change path.
+    /// Rebuild the cipher key if the raw key bytes changed.
     public func ensureKey(_ keyBytes: [UInt8]?) {
-        if keyBytesCached == keyBytes { return }
-        keyBytesCached = keyBytes
-        key = keyBytes.map { SymmetricKey(data: $0) }
+        keyCache.ensure(keyBytes)
     }
 
     /// Decrypt a `nonce(12) || tag(16) || ciphertext` packet. Nil on failure or no key.
     public func tryDecrypt(_ packet: ArraySlice<UInt8>) -> [UInt8]? {
-        guard let key else { return nil }
+        guard let key = keyCache.key else { return nil }
         let p = Array(packet)
         guard p.count >= RemSoundCrypto.encryptionOverheadBytes else { return nil }
         let nonceData = Data(p[0..<RemSoundCrypto.nonceBytes])

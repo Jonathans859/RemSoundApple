@@ -34,10 +34,6 @@ public final class AudioReceiverEngine {
 
     private var peerSecurity: [UInt32: PeerSecurityStatus] = [:]
 
-    public private(set) var packetsReceived: Int64 = 0
-    public private(set) var packetsDropped: Int64 = 0
-    public private(set) var packetsRejectedNotAllowed: Int64 = 0
-    public private(set) var sessionsOpenedCount: Int64 = 0
     public private(set) var bytesReceived: Int64 = 0
     public private(set) var bytesSent: Int64 = 0
     private var startDate: Date?
@@ -152,8 +148,6 @@ public final class AudioReceiverEngine {
         mixer.removeAllSessions()
     }
 
-    public var isRunning: Bool { socket != nil }
-
     /// Send raw bytes from the audio socket — heartbeat transport (single-port model: pings
     /// and pongs leave from the same socket/NAT pinhole audio arrives on, which is also what
     /// claims our slot on the v1 pairwise relay).
@@ -167,12 +161,8 @@ public final class AudioReceiverEngine {
     // MARK: - Packet path (network thread)
 
     private func handleRawPacket(buffer: [UInt8], length: Int, remote: UDPEndpoint) {
-        packetsReceived &+= 1
         bytesReceived &+= Int64(length)
-        guard let header = RemPacket.readHeader(buffer, length: length) else {
-            packetsDropped &+= 1
-            return
-        }
+        guard let header = RemPacket.readHeader(buffer, length: length) else { return }
 
         switch header.type {
         case .format:
@@ -194,14 +184,10 @@ public final class AudioReceiverEngine {
 
     private func handleFormat(remote: UDPEndpoint, streamId: UInt16, payload: ArraySlice<UInt8>) {
         guard playbackEnabled else { return }
-        guard let (format, fingerprint) = RemPacket.readFormat(payload) else {
-            packetsDropped &+= 1
-            return
-        }
+        guard let (format, fingerprint) = RemPacket.readFormat(payload) else { return }
 
         lock.lock()
         guard isSenderAllowed(remote) else {
-            packetsRejectedNotAllowed &+= 1
             lock.unlock()
             return
         }
@@ -249,7 +235,6 @@ public final class AudioReceiverEngine {
             onDiagnostic?("session superseded (streamId rotated): \(old.endpoint) old=\(old.streamId) new=\(streamId)")
         }
         if isNew {
-            sessionsOpenedCount &+= 1
             onDiagnostic?("session opened: \(remote) stream=\(streamId) \(format.displayDescription)")
             onSessionsChanged?()
         } else {
@@ -261,7 +246,6 @@ public final class AudioReceiverEngine {
         guard playbackEnabled else { return }
         lock.lock()
         guard isSenderAllowed(remote) else {
-            packetsRejectedNotAllowed &+= 1
             lock.unlock()
             return
         }
@@ -270,9 +254,7 @@ public final class AudioReceiverEngine {
         lock.unlock()
 
         guard let session else { return } // no Format seen yet — session opens on Format
-        if !session.handleAudioPayload(sequence: sequence, payload: payload) {
-            packetsDropped &+= 1
-        }
+        session.handleAudioPayload(sequence: sequence, payload: payload)
     }
 
     // MARK: - Maintenance

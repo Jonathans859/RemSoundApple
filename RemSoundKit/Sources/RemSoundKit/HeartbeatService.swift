@@ -11,7 +11,6 @@ public struct PeerHealth: Sendable {
     public let audioEndpoint: UDPEndpoint
     public let state: PeerHealthState
     public let rttMs: Int?
-    public let ageOfLastPong: TimeInterval?
 }
 
 /// Bidirectional UDP heartbeat, wire-compatible with the Windows `HeartbeatService`
@@ -41,8 +40,6 @@ public final class HeartbeatService {
     private var monotonicMs: Int64 {
         Int64((DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds) / 1_000_000)
     }
-
-    public var isRunning: Bool { timer != nil }
 
     public func start() {
         lock.lock()
@@ -82,26 +79,18 @@ public final class HeartbeatService {
         return peers.map { endpoint, state in snapshotHealthLocked(endpoint: endpoint, state: state, now: now) }
     }
 
-    public func health(for endpoint: UDPEndpoint) -> PeerHealth? {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let state = peers[endpoint] else { return nil }
-        return snapshotHealthLocked(endpoint: endpoint, state: state, now: Date())
-    }
-
     private func snapshotHealthLocked(endpoint: UDPEndpoint, state: PeerState, now: Date) -> PeerHealth {
         guard let lastPong = state.lastPong else {
             if let firstPing = state.firstPingSent, now.timeIntervalSince(firstPing) > Self.unreachableWindow {
-                return PeerHealth(audioEndpoint: endpoint, state: .unreachable, rttMs: nil,
-                                  ageOfLastPong: now.timeIntervalSince(firstPing))
+                return PeerHealth(audioEndpoint: endpoint, state: .unreachable, rttMs: nil)
             }
-            return PeerHealth(audioEndpoint: endpoint, state: .unknown, rttMs: nil, ageOfLastPong: nil)
+            return PeerHealth(audioEndpoint: endpoint, state: .unknown, rttMs: nil)
         }
         let age = now.timeIntervalSince(lastPong)
         let healthState: PeerHealthState = age <= Self.healthyWindow
             ? .healthy
             : (age <= Self.unreachableWindow ? .stale : .unreachable)
-        return PeerHealth(audioEndpoint: endpoint, state: healthState, rttMs: state.rttEwmaMs, ageOfLastPong: age)
+        return PeerHealth(audioEndpoint: endpoint, state: healthState, rttMs: state.rttEwmaMs)
     }
 
     private func sendPings() {

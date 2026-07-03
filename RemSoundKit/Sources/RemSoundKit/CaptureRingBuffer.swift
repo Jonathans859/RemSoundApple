@@ -50,50 +50,47 @@ final class CaptureRingBuffer: @unchecked Sendable {
 
     // MARK: - Producer side (realtime thread)
 
+    /// Space check + chunk accounting shared by both write paths. Returns the write index
+    /// to copy at, or nil when the whole incoming block must drop. Realtime-safe.
+    private func reserve(frames: Int) -> Int? {
+        lastChunkFramesValue.store(frames, ordering: .relaxed)
+        let write = writeCount.load(ordering: .relaxed) // producer-owned
+        let read = readCount.load(ordering: .acquiring)
+        if capacityFloats - (write - read) < frames * channels {
+            let dropped = droppedFramesCounter.load(ordering: .relaxed)
+            droppedFramesCounter.store(dropped + frames, ordering: .relaxed)
+            return nil
+        }
+        return write
+    }
+
     /// Interleaves an `AudioBufferList` (one plane per channel, or a single already-
     /// interleaved buffer) into the ring. Drops the whole block when space is short.
     func write(bufferList list: UnsafePointer<AudioBufferList>, frames: Int) {
-        lastChunkFramesValue.store(frames, ordering: .relaxed)
-        let floats = frames * channels
-        let write = writeCount.load(ordering: .relaxed) // producer-owned
-        let read = readCount.load(ordering: .acquiring)
-        if capacityFloats - (write - read) < floats {
-            let dropped = droppedFramesCounter.load(ordering: .relaxed)
-            droppedFramesCounter.store(dropped + frames, ordering: .relaxed)
-            return
-        }
-
         let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list))
         if buffers.count == 1 {
+            // Already interleaved (or mono) — byte-identical to the interleaved path.
             guard let data = buffers[0].mData else { return }
-            let src = data.assumingMemoryBound(to: Float.self)
-            for i in 0..<floats {
-                storage[(write + i) & mask] = src[i]
-            }
-        } else {
-            for channel in 0..<channels {
-                let plane = buffers[min(channel, buffers.count - 1)].mData?
-                    .assumingMemoryBound(to: Float.self)
-                for frame in 0..<frames {
-                    storage[(write + frame * channels + channel) & mask] = plane?[frame] ?? 0
-                }
-            }
-        }
-        writeCount.store(write + floats, ordering: .releasing)
-    }
-
-    /// Already-interleaved producer write (also the single-buffer path's logic; kept
-    /// separate so tests can drive the ring without constructing AudioBufferLists).
-    func writeInterleaved(_ src: UnsafePointer<Float>, frames: Int) {
-        lastChunkFramesValue.store(frames, ordering: .relaxed)
-        let floats = frames * channels
-        let write = writeCount.load(ordering: .relaxed)
-        let read = readCount.load(ordering: .acquiring)
-        if capacityFloats - (write - read) < floats {
-            let dropped = droppedFramesCounter.load(ordering: .relaxed)
-            droppedFramesCounter.store(dropped + frames, ordering: .relaxed)
+            writeInterleaved(data.assumingMemoryBound(to: Float.self), frames: frames)
             return
         }
+
+        guard let write = reserve(frames: frames) else { return }
+        for channel in 0..<channels {
+            let plane = buffers[min(channel, buffers.count - 1)].mData?
+                .assumingMemoryBound(to: Float.self)
+            for frame in 0..<frames {
+                storage[(write + frame * channels + channel) & mask] = plane?[frame] ?? 0
+            }
+        }
+        writeCount.store(write + frames * channels, ordering: .releasing)
+    }
+
+    /// Already-interleaved producer write — the single-buffer `write(bufferList:)` case
+    /// lands here, and tests drive the ring through it without building AudioBufferLists.
+    func writeInterleaved(_ src: UnsafePointer<Float>, frames: Int) {
+        guard let write = reserve(frames: frames) else { return }
+        let floats = frames * channels
         for i in 0..<floats {
             storage[(write + i) & mask] = src[i]
         }

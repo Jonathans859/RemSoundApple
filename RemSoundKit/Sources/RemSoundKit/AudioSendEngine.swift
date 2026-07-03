@@ -37,9 +37,6 @@ public final class AudioSendEngine {
     private var streamId: UInt16 = 1
     private var lastFormatSent = Date.distantPast
 
-    public private(set) var packetsSent: Int64 = 0
-    public private(set) var bytesSent: Int64 = 0
-
     /// Sends one datagram to one endpoint. Wired by the app to the receiver engine's audio
     /// socket so outbound audio shares the NAT pinhole heartbeats and inbound audio use.
     public var transport: ((_ data: [UInt8], _ endpoint: UDPEndpoint) -> Bool)?
@@ -86,8 +83,6 @@ public final class AudioSendEngine {
         formatSequence = 0
         accumulatorWritten = 0
         lastFormatSent = .distantPast
-        packetsSent = 0
-        bytesSent = 0
         running = encoder != nil
     }
 
@@ -166,9 +161,8 @@ public final class AudioSendEngine {
 
     private func sendToAll(_ packet: [UInt8]) {
         guard let transport else { return }
-        for target in targets where transport(packet, target) {
-            packetsSent &+= 1
-            bytesSent &+= Int64(packet.count)
+        for target in targets {
+            _ = transport(packet, target)
         }
     }
 }

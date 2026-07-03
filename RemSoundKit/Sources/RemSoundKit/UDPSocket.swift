@@ -157,21 +157,20 @@ public final class UDPSocket {
 
     /// Fire-and-forget UDP send. Returns true when the datagram was handed to the kernel.
     @discardableResult
-    public func send(_ data: [UInt8], count: Int? = nil, to endpoint: UDPEndpoint) -> Bool {
+    public func send(_ data: [UInt8], to endpoint: UDPEndpoint) -> Bool {
         lock.lock()
         let sock = fd
         lock.unlock()
         guard sock >= 0 else { return false }
         var sa = endpoint.sockaddr
-        let length = count ?? data.count
         let sent = data.withUnsafeBytes { bytes in
             withUnsafePointer(to: &sa) { ptr in
                 ptr.withMemoryRebound(to: Darwin.sockaddr.self, capacity: 1) { saPtr in
-                    sendto(sock, bytes.baseAddress, length, 0, saPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    sendto(sock, bytes.baseAddress, bytes.count, 0, saPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
                 }
             }
         }
-        return sent == length
+        return sent == data.count
     }
 
     @discardableResult

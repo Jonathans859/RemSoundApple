@@ -15,9 +15,6 @@ final class StreamSession {
     private var opusDecoder: OpusStreamDecoder?
     private var expectedNextSequence: UInt32?
 
-    private(set) var opusFecRecoveries: Int64 = 0
-    private(set) var opusUnrecoveredGaps: Int64 = 0
-
     // Reused scratch buffers — steady-state allocation-free decode path.
     private var floatScratch: [Float] = []
     private var stereoScratch: [Float] = []
@@ -46,42 +43,41 @@ final class StreamSession {
         format.matchesIdentity(of: other)
     }
 
-    /// Returns false when the payload was malformed / undecryptable (counted as a drop).
-    func handleAudioPayload(sequence: UInt32, payload: ArraySlice<UInt8>) -> Bool {
+    /// Decode one audio payload and hand the result to playout. Malformed or undecryptable
+    /// payloads are dropped silently — a wrong password is surfaced from the format-packet
+    /// fingerprint, never as garbage audio.
+    func handleAudioPayload(sequence: UInt32, payload: ArraySlice<UInt8>) {
         switch format.codec {
-        case .pcm: return handlePcm(payload)
-        case .opus: return handleOpus(sequence: sequence, payload: payload)
+        case .pcm: handlePcm(payload)
+        case .opus: handleOpus(sequence: sequence, payload: payload)
         }
     }
 
     // MARK: - PCM
 
-    private func handlePcm(_ payload: ArraySlice<UInt8>) -> Bool {
-        guard let sub = RemPcmFrame.readSubHeader(payload) else { return false }
+    private func handlePcm(_ payload: ArraySlice<UInt8>) {
+        guard let sub = RemPcmFrame.readSubHeader(payload) else { return }
         let partStart = payload.startIndex + RemPcmFrame.subHeaderSize
         guard let assembled = pcmAssembler.assemble(
             part: payload[partStart...], frameId: sub.frameId, partIndex: sub.partIndex, totalParts: sub.totalParts)
         else {
-            return true // pending or dropped-by-policy — not an error
+            return // pending or dropped-by-policy — not an error
         }
 
         // The reassembled frame is ciphertext — decrypt, then unpack int24 LE to float.
-        // A nil result means wrong password / no key: drop silently (the password mismatch
-        // is surfaced from the format-packet fingerprint, never as garbage audio).
-        guard let plain = decryptor.tryDecrypt(assembled[...]) else { return false }
+        guard let plain = decryptor.tryDecrypt(assembled[...]) else { return }
 
         let sampleCount = plain.count / 3
-        guard sampleCount > 0 else { return false }
+        guard sampleCount > 0 else { return }
         PcmPack.int24LEToFloat(plain[...], into: &floatScratch)
         emit(samples: floatScratch, sampleCount: sampleCount)
-        return true
     }
 
     // MARK: - Opus
 
-    private func handleOpus(sequence: UInt32, payload: ArraySlice<UInt8>) -> Bool {
-        guard let opusDecoder else { return false }
-        guard let plain = decryptor.tryDecrypt(payload) else { return false }
+    private func handleOpus(sequence: UInt32, payload: ArraySlice<UInt8>) {
+        guard let opusDecoder else { return }
+        guard let plain = decryptor.tryDecrypt(payload) else { return }
 
         // Floor at 120 samples = 2.5 ms, libopus's RESTRICTED_LOWDELAY minimum, so a
         // malformed format packet can't undersize the decode buffer.
@@ -89,27 +85,16 @@ final class StreamSession {
 
         // Single-packet gap: this packet carries FEC redundancy for the one we missed.
         // Decode the FEC frame first (so audio stays in order), then the current frame.
-        var useFec = false
-        if let expected = expectedNextSequence {
-            let gap = sequence &- expected // uint wrap-around intentional
-            if gap == 1 {
-                useFec = true
-            } else if gap > 1 && gap < 1_000_000 {
-                opusUnrecoveredGaps += 1
-            }
-        }
-
+        let useFec = expectedNextSequence.map { sequence &- $0 == 1 } ?? false // uint wrap intentional
         if useFec, let fecCount = opusDecoder.decode(plain, frameSize: frameSize, fec: true, into: &shortScratch) {
             emitShorts(count: fecCount)
-            opusFecRecoveries += 1
         }
 
         guard let decoded = opusDecoder.decode(plain, frameSize: frameSize, fec: false, into: &shortScratch) else {
-            return false
+            return
         }
         emitShorts(count: decoded)
         expectedNextSequence = sequence &+ 1
-        return true
     }
 
     private func emitShorts(count samplesPerChannel: Int) {

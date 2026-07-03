@@ -22,7 +22,6 @@ public struct PeerAnnouncement: Identifiable, Hashable, Sendable {
     public let audioPort: UInt16
     public let canSend: Bool
     public let canReceive: Bool
-    public let lastSeenUtc: Date
     /// All live IPv4 source addresses (network byte order), first-seen first. Never empty.
     public let addresses: [UInt32]
 
@@ -38,10 +37,6 @@ public struct PeerAnnouncement: Identifiable, Hashable, Sendable {
     public var addressStrings: [String] {
         addresses.map { UDPEndpoint(address: $0, port: 0).addressString }
     }
-
-    public var displayName: String { "\(name) at \(addressString)" }
-
-    public var audioEndpoint: UDPEndpoint { UDPEndpoint(address: address, port: audioPort) }
 
     public var audioEndpoints: [UDPEndpoint] {
         addresses.map { UDPEndpoint(address: $0, port: audioPort) }
@@ -101,7 +96,6 @@ public final class PeerDiscoveryService {
                 audioPort: record.audioPort,
                 canSend: record.canSend,
                 canReceive: record.canReceive,
-                lastSeenUtc: record.lastSeenByAddress.values.max() ?? .distantPast,
                 addresses: record.addressOrder)
         }.sorted {
             $0.name == $1.name ? $0.addressString < $1.addressString : $0.name < $1.name
