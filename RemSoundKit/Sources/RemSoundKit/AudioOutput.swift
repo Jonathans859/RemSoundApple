@@ -1,13 +1,19 @@
 import AVFAudio
 import Foundation
+#if os(iOS)
+import UIKit
+#endif
 
 /// Renders the mix bus through AVAudioEngine via an AVAudioSourceNode pulling 48 kHz
 /// interleaved stereo float32 from the `PlayoutMixer`.
 ///
-/// iOS specifics: configures an AVAudioSession with the `.playback` category (which, combined
-/// with the `audio` background mode in the app's Info.plist, keeps audio running with the
-/// screen locked or the app in the background) and asks for a short IO buffer for low output
-/// latency. Interruptions (calls, Siri) and media-services resets restart the engine.
+/// iOS specifics: configures an AVAudioSession with the `.playback` category and the
+/// `.mixWithOthers` option (which, combined with the `audio` background mode in the app's
+/// Info.plist, keeps audio running with the screen locked or the app in the background AND
+/// lets RemSound play alongside apps like Spotify instead of being interrupted by them) and
+/// asks for a short IO buffer for low output latency. Interruptions (calls, Siri), engine
+/// configuration changes, route changes, returning to the foreground, and media-services
+/// resets all restart the engine so audio never stays dead after another app grabs focus.
 public final class AudioOutput {
     /// Upper bound on frames rendered per inner loop; the interleaved scratch is sized to
     /// this. IO buffers are far smaller (~256 frames at 5 ms), larger requests are chunked.
@@ -17,6 +23,9 @@ public final class AudioOutput {
     private var engine: AVAudioEngine?
     private var sourceNode: AVAudioSourceNode?
     private var renderScratch: UnsafeMutablePointer<Float>?
+    /// The source→mixer connection format, kept so the graph can be reconnected after an
+    /// engine configuration change (which invalidates connections and stops the engine).
+    private var renderFormat: AVAudioFormat?
     private var observers: [NSObjectProtocol] = []
 
     public var onDiagnostic: ((String) -> Void)?
@@ -59,6 +68,7 @@ public final class AudioOutput {
         // interleaved scratch and splits it into the channel planes, in bounded chunks so the
         // audio thread never allocates.
         let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
+        renderFormat = format
         let scratch = UnsafeMutablePointer<Float>.allocate(capacity: Self.renderChunkFrames * 2)
         renderScratch = scratch
 
@@ -104,6 +114,7 @@ public final class AudioOutput {
         // detached — the render callback captured this pointer.
         renderScratch?.deallocate()
         renderScratch = nil
+        renderFormat = nil
         isRunning = false
 #if os(iOS)
         removeSessionObservers()
@@ -134,11 +145,15 @@ public final class AudioOutput {
             // .defaultToSpeaker: playAndRecord otherwise routes to the earpiece.
             // .allowBluetooth (HFP) is what makes AirPods microphones usable;
             // .allowBluetoothA2DP keeps full-quality output when only receiving on them.
+            // .mixWithOthers so other apps' audio isn't cut off (and doesn't cut us off).
             try? session.setCategory(
                 .playAndRecord, mode: .default,
-                options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
+                options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .mixWithOthers])
         } else {
-            try? session.setCategory(.playback, mode: .default)
+            // .mixWithOthers is the key to playing alongside apps like Spotify: without it,
+            // any other app starting playback interrupts us and iOS never sends a resume when
+            // the user switches back, so audio stays dead until relaunch.
+            try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
         }
     }
 
@@ -158,11 +173,11 @@ public final class AudioOutput {
                 self.engine?.pause()
                 self.onDiagnostic?("audio interrupted")
             case .ended:
+                // Resume when the system asks us to; the didBecomeActive observer is the
+                // backstop for interruptions that end without a resume flag.
                 let optionsRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
                 if AVAudioSession.InterruptionOptions(rawValue: optionsRaw).contains(.shouldResume) {
-                    try? AVAudioSession.sharedInstance().setActive(true)
-                    try? self.engine?.start()
-                    self.onDiagnostic?("audio resumed after interruption")
+                    self.resumeEngine("audio resumed after interruption")
                 }
             @unknown default:
                 break
@@ -188,10 +203,42 @@ public final class AudioOutput {
         ) { [weak self] _ in
             // Headphones unplugged / AirPods connected etc. The engine usually survives, but
             // if the route change stopped it, kick it back into life.
-            guard let self, self.isRunning, let engine = self.engine, !engine.isRunning else { return }
-            try? engine.start()
-            self.onDiagnostic?("audio restarted after route change")
+            self?.resumeEngine("audio restarted after route change")
         })
+
+        // The engine stops itself on a configuration change (route/format change while the
+        // engine is running, e.g. when another app's audio starts or ends around an app
+        // switch) and does NOT auto-restart — a common cause of "audio just stopped". Its
+        // connections may be invalidated, so reconnect the graph before restarting.
+        observers.append(center.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isRunning,
+                  let engine = self.engine, !engine.isRunning,
+                  let source = self.sourceNode, let format = self.renderFormat else { return }
+            engine.connect(source, to: engine.mainMixerNode, format: format)
+            self.resumeEngine("audio restarted after configuration change")
+        })
+
+        // Returning to the foreground: reassert the session and restart the engine if it was
+        // left paused. This is the safety net for interruptions that end without a
+        // .shouldResume flag (e.g. after another media app held focus), which is exactly the
+        // "switch away and audio never comes back" case.
+        observers.append(center.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.resumeEngine("audio resumed on returning to foreground")
+        })
+    }
+
+    /// Reassert the audio session and restart the engine if it is not already running. Safe
+    /// to call from any of the recovery notifications; a no-op when the engine is healthy.
+    private func resumeEngine(_ diagnostic: String) {
+        guard isRunning, let engine, !engine.isRunning else { return }
+        try? AVAudioSession.sharedInstance().setActive(true)
+        engine.prepare()
+        try? engine.start()
+        onDiagnostic?(diagnostic)
     }
 
     private func removeSessionObservers() {
