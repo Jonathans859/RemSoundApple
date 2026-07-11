@@ -1,3 +1,4 @@
+import AppIntents
 import RemSoundKit
 import SwiftUI
 
@@ -5,7 +6,9 @@ import SwiftUI
 /// AVAudioEngine output keep reception alive in the background and on the lock screen.
 @main
 struct RemSoundIOSApp: App {
-    @State private var controller = ReceiverController()
+    /// Shared instance, not a private one: Shortcuts actions (App Intents) must drive the
+    /// same receiver this UI shows.
+    private let controller = ReceiverController.shared
 
     var body: some Scene {
         WindowGroup {
@@ -17,4 +20,10 @@ struct RemSoundIOSApp: App {
                 }
         }
     }
+}
+
+/// Forwards the metadata extractor to the RemSoundKit package's Shortcuts actions —
+/// package-hosted App Intents are invisible without this app-target registration.
+extension RemSoundIOSApp: AppIntentsPackage {
+    static var includedPackages: [any AppIntentsPackage.Type] { [RemSoundKitIntentsPackage.self] }
 }

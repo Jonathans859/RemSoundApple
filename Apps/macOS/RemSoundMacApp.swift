@@ -1,3 +1,4 @@
+import AppIntents
 import RemSoundKit
 import SwiftUI
 
@@ -5,7 +6,9 @@ import SwiftUI
 /// tray icon plays for the Windows app.
 @main
 struct RemSoundMacApp: App {
-    @State private var controller = ReceiverController()
+    /// Shared instance, not a private one: Shortcuts actions (App Intents) must drive the
+    /// same receiver this UI shows.
+    private let controller = ReceiverController.shared
 
     var body: some Scene {
         MenuBarExtra {
@@ -22,4 +25,10 @@ struct RemSoundMacApp: App {
         }
         .menuBarExtraStyle(.window)
     }
+}
+
+/// Forwards the metadata extractor to the RemSoundKit package's Shortcuts actions —
+/// package-hosted App Intents are invisible without this app-target registration.
+extension RemSoundMacApp: AppIntentsPackage {
+    static var includedPackages: [any AppIntentsPackage.Type] { [RemSoundKitIntentsPackage.self] }
 }

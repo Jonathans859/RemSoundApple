@@ -126,7 +126,11 @@ doubt read `src/RemSound.Core/` (`RemPacket.cs`, `RemSoundCrypto.cs`, `PeerDisco
   thread, 10 ms units; mono duplicated to both channels) → `AudioSendEngine.swift`
   (accumulate → Opus encode → encrypt → targets; format re-announce every 250 ms) via
   `OpusStreamEncoder.swift` (`RemOpusShim` C target wraps variadic `opus_encoder_ctl`).
-- App layer: `ReceiverController.swift` (@MainActor façade, 1 Hz refresh tick),
+- App layer: `ReceiverController.swift` (@MainActor façade, 1 Hz refresh tick; the apps and
+  the Shortcuts actions share ONE instance via `ReceiverController.shared`),
+  `AppIntents.swift` (Shortcuts actions: volume up/down, receiving on/off, mute — package-
+  hosted App Intents, so each app target MUST keep its `AppIntentsPackage` registration or
+  the actions silently vanish from Shortcuts; no entitlements or ASC setup involved),
   `ReceiverRootView.swift` (shared SwiftUI — a `NavigationStack` wrapping a two-tab
   `TabView`: **Connectivity** = status/peers/add-peer/send/password, **Audio** = playback
   options; a persistent top-right About button opens `AboutView.swift`, which links to this

@@ -33,6 +33,10 @@ public struct PeerListEntry: Identifiable, Hashable, Sendable {
 @MainActor
 @Observable
 public final class ReceiverController {
+    /// The one live instance. The apps' UI and the Shortcuts actions (`AppIntents.swift`)
+    /// must drive the SAME receiver, so both go through this instead of creating their own.
+    public static let shared = ReceiverController()
+
     // Published state
     public private(set) var peers: [PeerListEntry] = []
     public private(set) var statusSummary = "Stopped"
