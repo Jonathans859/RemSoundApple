@@ -65,6 +65,37 @@ jobs:
       - name: Use the newest installed Xcode (iOS 26 SDK required for App Store uploads)
         run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
 
+      # xcodebuild's ARCHIVE step signs with an Apple Development identity (only the
+      # export re-sign is cloud-managed distribution signing), and on a throwaway runner
+      # -allowProvisioningUpdates mints a brand-new Development certificate every run —
+      # until the account hits Apple's certificate cap (first hit 2026-07-11, v0.3.0).
+      # Persisting ONE keychain across runs lets every later run reuse the same identity:
+      # new certificates are only minted on a cold cache and when the year-long
+      # certificate expires. The always-unique key + restore-keys prefix means each run
+      # restores the newest keychain AND saves its (possibly updated) state for the next.
+      # The fixed keychain password below only guards a Development-grade key inside this
+      # repo's Actions cache — it cannot distribute anything; the distribution key never
+      # leaves Apple.
+      - name: Reuse the CI signing keychain across runs
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Keychains/ci-signing.keychain-db
+          key: ci-signing-keychain-${{ github.run_id }}-${{ github.run_attempt }}-ios
+          restore-keys: ci-signing-keychain-
+
+      - name: Activate the CI signing keychain
+        run: |
+          KEYCHAIN="$HOME/Library/Keychains/ci-signing.keychain-db"
+          if [ ! -f "$KEYCHAIN" ]; then
+            security create-keychain -p remsound-ci "$KEYCHAIN"
+          fi
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p remsound-ci "$KEYCHAIN"
+          # Non-interactive codesign access to keys restored from a previous run's cache.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k remsound-ci "$KEYCHAIN" >/dev/null 2>&1 || true
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed 's/"//g')
+          security default-keychain -s "$KEYCHAIN"
+
       - name: Derive marketing version and build number
         id: version
         env:
@@ -204,6 +235,29 @@ jobs:
 
       - name: Use the newest installed Xcode
         run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+
+      # Same certificate-cap avoidance as the iOS job — see the comment there. Both jobs
+      # share the restore-keys prefix, so either platform's keychain (each holding a
+      # reusable Apple Development identity) unblocks the other.
+      - name: Reuse the CI signing keychain across runs
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Keychains/ci-signing.keychain-db
+          key: ci-signing-keychain-${{ github.run_id }}-${{ github.run_attempt }}-macos
+          restore-keys: ci-signing-keychain-
+
+      - name: Activate the CI signing keychain
+        run: |
+          KEYCHAIN="$HOME/Library/Keychains/ci-signing.keychain-db"
+          if [ ! -f "$KEYCHAIN" ]; then
+            security create-keychain -p remsound-ci "$KEYCHAIN"
+          fi
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p remsound-ci "$KEYCHAIN"
+          # Non-interactive codesign access to keys restored from a previous run's cache.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k remsound-ci "$KEYCHAIN" >/dev/null 2>&1 || true
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed 's/"//g')
+          security default-keychain -s "$KEYCHAIN"
 
       - name: Derive marketing version and build number
         id: version

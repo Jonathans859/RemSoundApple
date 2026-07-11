@@ -99,8 +99,11 @@ see `.claude/agents/release-manager.md`). One-time Apple/secrets setup lives in 
   every run (the private key never persists), until Apple's per-account cap is hit. Fix:
   the user revokes the CI-minted Apple Development certificates in the portal
   (developer.apple.com → Certificates; do NOT touch the cloud-managed **Apple
-  Distribution** certificate), then `gh run rerun <id> --failed`. Recurs until the archive
-  step stops minting per-run Development certs.
+  Distribution** certificate), then `gh run rerun <id> --failed`. Since 2026-07-11 the
+  workflow persists the signing keychain via actions/cache ("Reuse the CI signing
+  keychain" steps) so a Development identity is REUSED across runs — minting only happens
+  on a cold cache or an expired (~1 year) certificate. If this error nonetheless recurs,
+  check those cache steps are still restoring.
 - **Archive/export — "Cloud signing permission error" / "No profiles found"**: the App ID
   `com.jonathan859.remsound` and its App Store Connect app record must exist, and the API
   key must be **Admin** (App Manager is refused for cloud signing).
