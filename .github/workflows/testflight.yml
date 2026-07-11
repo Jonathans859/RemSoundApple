@@ -27,6 +27,13 @@ name: TestFlight
 on:
   push:
     branches: [main]
+    # Docs-only pushes must not mint a TestFlight build. A push is skipped only when
+    # EVERY changed file matches; anything mixing code and docs still builds.
+    paths-ignore:
+      - "**.md"
+      - ".claude/**"
+      - "LICENSE"
+      - ".gitignore"
   release:
     types: [published]
 

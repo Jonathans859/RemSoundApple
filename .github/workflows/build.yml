@@ -1,8 +1,19 @@
 name: Build
 
+# Docs-only changes skip CI entirely (skipped only when EVERY changed file matches).
 on:
   push:
+    paths-ignore:
+      - "**.md"
+      - ".claude/**"
+      - "LICENSE"
+      - ".gitignore"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - ".claude/**"
+      - "LICENSE"
+      - ".gitignore"
 
 jobs:
   test-kit:
