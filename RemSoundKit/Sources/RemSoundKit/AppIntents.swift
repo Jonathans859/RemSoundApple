@@ -90,6 +90,12 @@ public struct SetMutedIntent: AppIntent {
     public func perform() async throws -> some IntentResult & ProvidesDialog {
         let controller = ReceiverController.shared
         controller.isMuted = muted
-        return .result(dialog: muted ? "Audio muted" : "Audio unmuted")
+        // Two literal returns, not a ternary — a ternary of string literals infers String,
+        // which does not convert to IntentDialog (only literals convert directly).
+        if muted {
+            return .result(dialog: "Audio muted")
+        } else {
+            return .result(dialog: "Audio unmuted")
+        }
     }
 }
