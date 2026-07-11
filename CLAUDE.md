@@ -128,9 +128,13 @@ doubt read `src/RemSound.Core/` (`RemPacket.cs`, `RemSoundCrypto.cs`, `PeerDisco
   `OpusStreamEncoder.swift` (`RemOpusShim` C target wraps variadic `opus_encoder_ctl`).
 - App layer: `ReceiverController.swift` (@MainActor façade, 1 Hz refresh tick; the apps and
   the Shortcuts actions share ONE instance via `ReceiverController.shared`),
-  `AppIntents.swift` (Shortcuts actions: volume up/down, receiving on/off, mute — package-
-  hosted App Intents, so each app target MUST keep its `AppIntentsPackage` registration or
-  the actions silently vanish from Shortcuts; no entitlements or ASC setup involved),
+  `AppIntents.swift` (Shortcuts actions: volume up/down, receiving on/off + toggle, mute
+  set + toggle — package-hosted App Intents, so each app target MUST keep its
+  `AppIntentsPackage` registration or the actions silently vanish from Shortcuts; the
+  parameterless toggles exist because App Shortcuts can't pre-fill a Bool. Each app target
+  also carries its own `RemSoundAppShortcuts: AppShortcutsProvider` — ready-made shortcuts
+  + Siri phrases; it must stay IN the app target because AppIntentsSSUTraining reads the
+  literal phrase strings there. No entitlements or ASC setup involved),
   `ReceiverRootView.swift` (shared SwiftUI — a `NavigationStack` wrapping a two-tab
   `TabView`: **Connectivity** = status/peers/add-peer/send/password, **Audio** = playback
   options; a persistent top-right About button opens `AboutView.swift`, which links to this

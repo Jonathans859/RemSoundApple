@@ -73,6 +73,52 @@ public struct SetReceivingIntent: AppIntent {
     }
 }
 
+/// Parameterless toggles exist alongside the Bool setters because App Shortcuts (the
+/// ready-made entries in the Shortcuts app, with Siri phrases) cannot pre-fill a Bool
+/// parameter — invoking a setter by voice would prompt "On or off?", which breaks the
+/// eyes-free flow this app is built for. The setters stay for use inside user-built
+/// shortcuts, where the value is wired up in the editor.
+
+public struct ToggleMuteIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Toggle Mute"
+    public static let description = IntentDescription("Mutes RemSound's audio playback if it is audible, unmutes it if it is muted.")
+
+    public init() {}
+
+    @MainActor
+    public func perform() async throws -> some IntentResult & ProvidesDialog {
+        let controller = ReceiverController.shared
+        controller.isMuted.toggle()
+        if controller.isMuted {
+            return .result(dialog: "Audio muted")
+        } else {
+            return .result(dialog: "Audio unmuted")
+        }
+    }
+}
+
+public struct ToggleReceivingIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Toggle Receiving"
+    public static let description = IntentDescription("Stops listening for RemSound senders if receiving, starts if stopped.")
+
+    public init() {}
+
+    @MainActor
+    public func perform() async throws -> some IntentResult & ProvidesDialog {
+        let controller = ReceiverController.shared
+        if controller.isRunning {
+            controller.stop()
+            return .result(dialog: "Receiving off")
+        } else {
+            controller.start()
+            if let error = controller.lastError {
+                return .result(dialog: "Could not start receiving: \(error)")
+            }
+            return .result(dialog: "Receiving on")
+        }
+    }
+}
+
 public struct SetMutedIntent: AppIntent {
     public static let title: LocalizedStringResource = "Mute or Unmute"
     public static let description = IntentDescription("Mutes or unmutes RemSound's audio playback.")
