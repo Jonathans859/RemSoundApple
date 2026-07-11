@@ -221,9 +221,20 @@ public struct ReceiverRootView: View {
             .accessibilityHint("Lower is faster but needs a steadier network. The Windows app default is 80 milliseconds.")
 
             Toggle("Connection sounds", isOn: $controller.cuesEnabled)
-                .accessibilityHint("Plays a sound when a peer's audio starts or stops")
+                .accessibilityHint("Plays a sound when a peer connects or disconnects")
+
+#if os(iOS)
+            Toggle("Exclusive audio", isOn: $controller.exclusiveAudio)
+                .accessibilityHint("Keeps audio and the connection running while the screen is locked, by taking sole control of playback. While this is on, other apps' sound is interrupted instead of mixing in.")
+#endif
         } header: {
             Text("Playback")
+        } footer: {
+#if os(iOS)
+            Text("Exclusive audio keeps RemSound running while the screen is locked; the trade-off is that other apps' audio is interrupted while receiving.")
+#else
+            EmptyView()
+#endif
         }
     }
 

@@ -124,6 +124,23 @@ public final class AudioOutput {
     }
 
 #if os(iOS)
+    /// When true the session drops `.mixWithOthers`: RemSound becomes the PRIMARY audio
+    /// client. That is what keeps a locked iPhone streaming — iOS is willing to suspend a
+    /// backgrounded app whose mixable session it deems silent and to let the network radio
+    /// power-save under it, which kills the UDP stream (and our heartbeats) until the screen
+    /// wakes. Exclusive playback holds the device awake the same way a music app does.
+    /// Cost: other apps' audio is interrupted while RemSound runs, so this is opt-in.
+    private var exclusiveAudio = false
+
+    public func setExclusiveAudio(_ exclusive: Bool) {
+        guard exclusiveAudio != exclusive else { return }
+        exclusiveAudio = exclusive
+        guard isRunning else { return } // start() applies the right category itself
+        applySessionCategory()
+        // The category change re-routes audio, which can stop a running engine.
+        if let engine, !engine.isRunning { try? engine.start() }
+    }
+
     /// Whether the session is configured for simultaneous record + playback. Set BEFORE
     /// microphone capture starts. `.playAndRecord` is only held while sending — it routes
     /// Bluetooth output through the lower-fidelity bidirectional link, so plain `.playback`
@@ -146,14 +163,18 @@ public final class AudioOutput {
             // .allowBluetooth (HFP) is what makes AirPods microphones usable;
             // .allowBluetoothA2DP keeps full-quality output when only receiving on them.
             // .mixWithOthers so other apps' audio isn't cut off (and doesn't cut us off).
-            try? session.setCategory(
-                .playAndRecord, mode: .default,
-                options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .mixWithOthers])
+            // Exclusive audio drops .mixWithOthers here too (locked-screen streaming).
+            var options: AVAudioSession.CategoryOptions =
+                [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP]
+            if !exclusiveAudio { options.insert(.mixWithOthers) }
+            try? session.setCategory(.playAndRecord, mode: .default, options: options)
         } else {
             // .mixWithOthers is the key to playing alongside apps like Spotify: without it,
             // any other app starting playback interrupts us and iOS never sends a resume when
-            // the user switches back, so audio stays dead until relaunch.
-            try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            // the user switches back, so audio stays dead until relaunch. Exclusive audio
+            // trades that away for locked-screen survival (see `exclusiveAudio` above).
+            try? session.setCategory(
+                .playback, mode: .default, options: exclusiveAudio ? [] : [.mixWithOthers])
         }
     }
 
@@ -247,5 +268,9 @@ public final class AudioOutput {
         }
         observers.removeAll()
     }
+#else
+    /// macOS has no AVAudioSession — exclusive audio is an iOS-only concept; accept and
+    /// ignore so the shared controller doesn't need platform conditionals.
+    public func setExclusiveAudio(_ exclusive: Bool) {}
 #endif
 }

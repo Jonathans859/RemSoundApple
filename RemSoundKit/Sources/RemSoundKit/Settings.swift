@@ -67,6 +67,13 @@ public final class ReceiverSettings {
         set { defaults.set(newValue, forKey: "cuesEnabled") }
     }
 
+    /// iOS: hold the audio session exclusively (no `.mixWithOthers`) so playback — and the
+    /// UDP socket under it — survives the screen locking. Default off = mix-friendly.
+    public var exclusiveAudio: Bool {
+        get { defaults.bool(forKey: "exclusiveAudio") }
+        set { defaults.set(newValue, forKey: "exclusiveAudio") }
+    }
+
     /// Stable id of the input the user picked for microphone sending (see
     /// `MicrophoneCapture.availableInputs`). Nil/empty = system default input.
     public var selectedMicrophoneId: String? {

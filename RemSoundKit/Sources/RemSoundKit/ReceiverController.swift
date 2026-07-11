@@ -104,6 +104,16 @@ public final class ReceiverController {
         }
     }
 
+    /// iOS: take sole control of audio (drop `.mixWithOthers`) so playback and the network
+    /// survive the screen locking, at the cost of interrupting other apps' audio. Persisted;
+    /// a no-op on macOS.
+    public var exclusiveAudio: Bool {
+        didSet {
+            settings.exclusiveAudio = exclusiveAudio
+            output.setExclusiveAudio(exclusiveAudio)
+        }
+    }
+
     public var password: String {
         didSet {
             settings.password = password
@@ -129,8 +139,12 @@ public final class ReceiverController {
     private var passwordGeneration = 0
     /// Resolved IPv4 addresses (network byte order) per manual peer id.
     private var manualResolved: [UUID: [UDPEndpoint]] = [:]
-    /// Addresses currently delivering audio — drives connect/disconnect cues.
+    /// Addresses currently delivering audio — drives the "Receiving from N peers" summary.
     private var audibleAddresses: Set<UInt32> = []
+    /// Connect/disconnect cue state per selected peer, keyed by the stable primary address.
+    /// Mirrors the Windows receiver's hysteresis rule (MainForm.
+    /// DetectAndAnnouncePeerHealthTransitions, upstream 2026-05-31) — see `updateCues`.
+    private var peerConnectedState: [UInt32: Bool] = [:]
     private var refreshTask: Task<Void, Never>?
 
     // Previous traffic-counter snapshot for the per-second rate lines.
@@ -150,11 +164,15 @@ public final class ReceiverController {
         targetLatencyMs = settings.targetLatencyMs
         cuesEnabled = settings.cuesEnabled
         password = settings.password
+        exclusiveAudio = settings.exclusiveAudio
         output = AudioOutput(mixer: engine.mixer)
 
         mixer.volume = volume
         mixer.setTargetLatencyMs(targetLatencyMs)
         cues.enabled = cuesEnabled
+        // didSet does not fire for the assignment above (init), so push the persisted
+        // exclusive-audio choice into the output explicitly.
+        output.setExclusiveAudio(exclusiveAudio)
 
         engine.onHeartbeatReceived = { [heartbeat] buffer, length, remote in
             heartbeat.handleInjectedPacket(buffer, length: length, remote: remote)
@@ -237,6 +255,7 @@ public final class ReceiverController {
         engine.stop()
         isRunning = false
         audibleAddresses = []
+        peerConnectedState = [:] // cleared silently — the stop toggle is its own feedback
         statusSummary = "Stopped"
         connectionDetails = []
         refreshPeerList()
@@ -588,21 +607,63 @@ public final class ReceiverController {
     }
 
     private func updateCues() {
+        // Mirrors the Windows receiver's cue rule (upstream 2026-05-31 rewrite): connected
+        // the moment audio arrives OR the heartbeat is solidly healthy; lost only when audio
+        // has stopped AND the heartbeat has gone unreachable. Everything in between
+        // (heartbeat stale, audio briefly paused) HOLDS the previous state — hysteresis, so
+        // a two-second Wi-Fi/VPN stall never fires a false disconnect+connect cue pair.
+        // Audio arrives hundreds of times a second, so a 3-second gap is a genuine
+        // interruption, not jitter; the unreachable heartbeat (~5 s of no replies) is the
+        // slower gate for a real, total loss.
+        let audioWindow: TimeInterval = 3
+        let health = heartbeat.allPeerHealth()
         var nowAudible: Set<UInt32> = []
+        var seen: Set<UInt32> = []
+        var connected: [UInt32] = []
+        var lost: [UInt32] = []
+
         for entry in peers {
             guard entry.isSelected, let primary = entry.audioEndpoint else { continue }
             // Keyed by the stable primary address even when audio arrives on another path,
             // so a path switch doesn't fire a spurious disconnect+connect cue pair.
-            if entry.addresses.contains(where: { engine.isAudioFlowing(from: $0, within: 1.5) }) {
-                nowAudible.insert(primary.address)
+            let key = primary.address
+            seen.insert(key)
+            let audioFlowing = entry.addresses.contains {
+                engine.isAudioFlowing(from: $0, within: audioWindow)
+            }
+            if audioFlowing { nowAudible.insert(key) }
+
+            let state = bestHealth(for: entry.addresses, in: health)?.state ?? .unknown
+            let isConnected = audioFlowing || state == .healthy
+            let isLost = !audioFlowing && state == .unreachable
+            let wasConnected = peerConnectedState[key] ?? false
+            if isConnected && !wasConnected {
+                connected.append(key)
+                peerConnectedState[key] = true
+            } else if isLost && wasConnected {
+                lost.append(key)
+                peerConnectedState[key] = false
+            } else if peerConnectedState[key] == nil {
+                // First sighting and neither clearly connected nor lost (address entered but
+                // no audio or pong yet) — seed quietly. If it later goes unreachable without
+                // ever connecting, that is a connect-FAILED event and stays silent too.
+                peerConnectedState[key] = false
             }
         }
-        let appeared = nowAudible.subtracting(audibleAddresses)
-        let disappeared = audibleAddresses.subtracting(nowAudible)
-        if !appeared.isEmpty { cues.play(.connect) }
-        if !disappeared.isEmpty { cues.play(.disconnect) }
-        for address in appeared { announce("Receiving audio from \(name(for: address))") }
-        for address in disappeared { announce("Audio from \(name(for: address)) stopped") }
+
+        // Peers that vanished from tracking entirely (deselected or expired): a disconnect
+        // cue only if they were connected when last seen — one that never connected stays quiet.
+        for (key, wasConnected) in peerConnectedState where !seen.contains(key) {
+            if wasConnected { lost.append(key) }
+            peerConnectedState.removeValue(forKey: key)
+        }
+
+        if !connected.isEmpty { cues.play(.connect) }
+        if !lost.isEmpty { cues.play(.disconnect) }
+        // "Connected"/"lost", not "receiving audio" — with the heartbeat leg of the rule, a
+        // peer can be connected before (or without) sending any audio.
+        for address in connected { announce("Connected to \(name(for: address))") }
+        for address in lost { announce("Connection to \(name(for: address)) lost") }
         audibleAddresses = nowAudible
     }
 

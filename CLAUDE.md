@@ -102,6 +102,14 @@ doubt read `src/RemSound.Core/` (`RemPacket.cs`, `RemSoundCrypto.cs`, `PeerDisco
    (`PeerDiscoveryTests` pins this).
 8. Jitter-buffer click-trim must keep a cushion ABOVE target latency, never trim to bare
    target (causes sustained underruns on bursty VPN paths) — see `SessionPlayout.write`.
+9. iOS suspends a locked/backgrounded app whose audio session is `.mixWithOthers` (and
+   lets the radio power-save under it) — inbound UDP and our heartbeats die until screen
+   wake. The opt-in **Exclusive audio** setting drops `.mixWithOthers` to survive the lock
+   screen; both modes are deliberate, don't remove either (`AudioOutput.setExclusiveAudio`).
+10. Connect/disconnect cues must keep the Windows hysteresis rule (connected = audio within
+    3 s OR healthy heartbeat; lost = no audio AND heartbeat unreachable ~5 s; in between
+    holds state) — a bare audio-window check fires false disconnect+connect pairs on
+    2-second Wi-Fi/VPN stalls (`ReceiverController.updateCues`).
 
 ## Architecture (everything shared lives in `RemSoundKit/Sources/RemSoundKit/`)
 
