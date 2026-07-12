@@ -78,18 +78,19 @@ public final class ProfileStore {
     /// Launch-time profile application: rewrites the persisted live settings in place,
     /// BEFORE `ReceiverController` reads them, so no property observers or engines are
     /// involved (applying through the controller's didSets during startup re-enters
-    /// `start()`). The send toggle is untouched by design — it is never persisted, so a
-    /// profile applied at launch cannot turn the microphone on; only a hand-applied one
-    /// can (the mic-never-hot-at-launch rule).
-    public func applyStartupProfile(to settings: ReceiverSettings) {
+    /// `start()`). Returns the applied profile so the controller can honour its send
+    /// toggle — the one profile field with no persisted setting behind it — once the
+    /// engines are up.
+    @discardableResult
+    public func applyStartupProfile(to settings: ReceiverSettings) -> ReceiverProfile? {
         let profileId: UUID?
         switch settings.startupProfile {
-        case .off: return
+        case .off: return nil
         case .lastApplied: profileId = settings.lastAppliedProfileId
         case .fixed(let id): profileId = id
         }
         guard let profileId,
-              let profile = profiles.first(where: { $0.id == profileId }) else { return }
+              let profile = profiles.first(where: { $0.id == profileId }) else { return nil }
         settings.manualPeers = profile.manualPeers
         settings.selectedPeerAddresses = Set(profile.selectedPeerAddresses)
         settings.receiveEnabled = profile.receiveEnabled
@@ -97,5 +98,6 @@ public final class ProfileStore {
         settings.targetLatencyMs = profile.targetLatencyMs
         settings.password = password(forProfile: profileId)
         settings.lastAppliedProfileId = profileId
+        return profile
     }
 }

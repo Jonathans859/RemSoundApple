@@ -68,7 +68,8 @@ public final class ReceiverSettings {
     }
 
     /// The "Receive audio" playback toggle — persisted like the Windows checkbox. Default
-    /// on. (The send toggle is deliberately NOT persisted — the mic never goes hot at launch.)
+    /// on. (The send toggle has no setting here — the user flips it each session; profiles
+    /// record it, and a startup profile saved with sending on starts the mic at launch.)
     public var receiveEnabled: Bool {
         get { defaults.object(forKey: "receiveEnabled") == nil ? true : defaults.bool(forKey: "receiveEnabled") }
         set { defaults.set(newValue, forKey: "receiveEnabled") }

@@ -70,18 +70,21 @@ doubt read `src/RemSound.Core/` (`RemPacket.cs`, `RemSoundCrypto.cs`, `PeerDisco
   `ReceiverController.applyProfile`. JSON in UserDefaults; each profile's password is its
   own Keychain item (`profile-password-<uuid>`), never in the JSON
   (`ProfileTests.testEncodedProfileJsonNeverContainsAPassword`). NOT the Windows profile
-  file format — local only. Applying a profile with sending on DOES start the mic; that's
-  an explicit user tap, so it doesn't break the mic-never-hot-at-launch rule.
+  file format — local only. A profile applies exactly as saved, send included — hand-tap
+  or at launch, no exceptions (user, 2026-07-12).
   Startup profile (`StartupProfileChoice`: off / lastApplied / fixed id): applied in
   `ReceiverController.init` by REWRITING the persisted settings before they're read
   (`ProfileStore.applyStartupProfile(to:)`) — never via `applyProfile`, whose didSets
-  re-enter `start()` during startup. Send stays off structurally at launch because the
-  send toggle is never persisted.
+  re-enter `start()` during startup. Send has no persisted setting, so it rides the
+  returned profile into `startupSendPending`, consumed at the END of the first `start()`
+  (isRunning already true ⇒ the sendEnabled didSet can't re-enter `start()`).
 - Mic send: Opus-only, one mixed lane, 48 kHz stereo 192 kbps (RESTRICTED_LOWDELAY,
   complexity 10, VBR, FEC, 10 % loss bias) — mirrors the Windows sender. One endpoint per
   selected peer (two paths of one machine would double its sessions). Outbound audio uses
-  the receiver's socket. The send toggle is deliberately NOT persisted — the mic never goes
-  hot at launch.
+  the receiver's socket. The send toggle is deliberately NOT persisted as a live setting —
+  but profiles record it, and per the user (2026-07-12) a profile applies exactly as
+  saved, so a startup profile saved with sending on DOES start the mic at launch. Do not
+  reintroduce "never hot at launch" exceptions around profiles.
 - **Send and receive are independent** (Windows v5 parity, 2026-07-12): the socket,
   heartbeats, and discovery run for the app's lifetime (`controller.start()` at launch);
   "Receive audio" (`receiveEnabled`, persisted, default on) gates playback ONLY —

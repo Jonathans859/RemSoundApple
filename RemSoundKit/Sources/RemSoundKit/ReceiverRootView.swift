@@ -247,7 +247,7 @@ public struct ReceiverRootView: View {
         } header: {
             Text("At launch")
         } footer: {
-            Text("Starting up never turns on microphone sending, even if the profile has it on — the send switch always starts off.")
+            Text("The profile is applied exactly as saved — if it was saved with microphone sending on, sending starts with the app.")
         }
     }
 

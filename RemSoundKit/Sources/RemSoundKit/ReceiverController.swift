@@ -59,9 +59,11 @@ public final class ReceiverController {
     /// methods below, which keep `ProfileStore` in sync.
     public private(set) var profiles: [ReceiverProfile] = []
 
-    /// Microphone sending on/off. Deliberately NOT persisted — the microphone never goes
-    /// hot just because the app launched; the user flips it each session. Independent of
-    /// `receiveEnabled` (Windows parity): both ride the always-bound audio socket.
+    /// Microphone sending on/off. Not persisted as a live setting — the user flips it
+    /// each session — but profiles record it, and a startup profile saved with sending on
+    /// starts the mic at launch (user decision 2026-07-12; see `startupSendPending`).
+    /// Independent of `receiveEnabled` (Windows parity): both ride the always-bound
+    /// audio socket.
     public var sendEnabled = false {
         didSet {
             guard sendEnabled != oldValue else { return }
@@ -175,6 +177,10 @@ public final class ReceiverController {
 
     private var manualPeers: [ManualPeer]
     private var selectedAddresses: Set<String>
+    /// The startup profile was saved with sending on — honoured at the end of the first
+    /// `start()`, once the engines and discovery are up (flipping `sendEnabled` any
+    /// earlier re-enters `start()` from its didSet).
+    private var startupSendPending = false
     /// Monotonic token guarding async PBKDF2 results — see `applyPassword`.
     private var passwordGeneration = 0
     /// Resolved IPv4 addresses (network byte order) per manual peer id.
@@ -206,10 +212,12 @@ public final class ReceiverController {
 
     public init() {
         // Startup profile (if configured): rewrite the persisted settings BEFORE they are
-        // read below. Rewriting-then-loading avoids every didSet/engine side effect, and
-        // sending stays off structurally — the send toggle is never persisted, so a
-        // launch-applied profile cannot turn the microphone on.
-        ProfileStore().applyStartupProfile(to: ReceiverSettings())
+        // read below — rewriting-then-loading avoids every didSet/engine side effect. The
+        // profile applies exactly as saved, send toggle included; send has no persisted
+        // setting behind it, so it is carried by the returned profile and honoured at the
+        // end of the first start().
+        let launchProfile = ProfileStore().applyStartupProfile(to: ReceiverSettings())
+        startupSendPending = launchProfile?.sendEnabled ?? false
 
         manualPeers = settings.manualPeers
         selectedAddresses = settings.selectedPeerAddresses
@@ -301,6 +309,13 @@ public final class ReceiverController {
             }
         }
         refreshNow()
+
+        // Startup profile saved with sending on: turn the mic on now, exactly as saved.
+        // isRunning is already true, so the sendEnabled didSet cannot re-enter start().
+        if startupSendPending {
+            startupSendPending = false
+            sendEnabled = true
+        }
     }
 
     public func stop() {

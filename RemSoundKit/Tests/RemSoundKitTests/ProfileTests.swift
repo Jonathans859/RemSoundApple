@@ -77,7 +77,7 @@ final class ProfileTests: XCTestCase {
         settings.receiveEnabled = false
         settings.targetLatencyMs = 45
 
-        store.applyStartupProfile(to: settings)
+        let applied = store.applyStartupProfile(to: settings)
 
         XCTAssertEqual(settings.manualPeers, profile.manualPeers)
         XCTAssertEqual(settings.selectedPeerAddresses, Set(profile.selectedPeerAddresses))
@@ -86,8 +86,10 @@ final class ProfileTests: XCTestCase {
         XCTAssertEqual(settings.targetLatencyMs, 120)
         // Now the active profile — feeds the .lastApplied mode.
         XCTAssertEqual(settings.lastAppliedProfileId, profile.id)
-        // No send key exists to assert on: the send toggle is never persisted, which is
-        // exactly why a launch-applied profile can't turn the microphone on.
+        // Send has no persisted setting; the returned profile carries it so the
+        // controller can start the mic at the end of the first start().
+        XCTAssertEqual(applied, profile)
+        XCTAssertTrue(applied?.sendEnabled ?? false)
     }
 
     func testApplyStartupProfileLastAppliedUsesTheRememberedProfile() {
@@ -100,7 +102,7 @@ final class ProfileTests: XCTestCase {
         settings.startupProfile = .lastApplied
         settings.lastAppliedProfileId = travel.id
 
-        store.applyStartupProfile(to: settings)
+        XCTAssertEqual(store.applyStartupProfile(to: settings), travel)
 
         XCTAssertEqual(settings.targetLatencyMs, 200)
         XCTAssertEqual(settings.lastAppliedProfileId, travel.id)
@@ -111,15 +113,15 @@ final class ProfileTests: XCTestCase {
         let settings = ReceiverSettings(defaults: defaults)
         settings.targetLatencyMs = 45
 
-        store.applyStartupProfile(to: settings) // off (default)
+        XCTAssertNil(store.applyStartupProfile(to: settings)) // off (default)
         XCTAssertEqual(settings.targetLatencyMs, 45)
 
         settings.startupProfile = .fixed(UUID()) // references no stored profile
-        store.applyStartupProfile(to: settings)
+        XCTAssertNil(store.applyStartupProfile(to: settings))
         XCTAssertEqual(settings.targetLatencyMs, 45)
 
         settings.startupProfile = .lastApplied // nothing applied yet
-        store.applyStartupProfile(to: settings)
+        XCTAssertNil(store.applyStartupProfile(to: settings))
         XCTAssertEqual(settings.targetLatencyMs, 45)
     }
 
