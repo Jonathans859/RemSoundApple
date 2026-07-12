@@ -136,6 +136,11 @@ doubt read `src/RemSound.Core/` (`RemPacket.cs`, `RemSoundCrypto.cs`, `PeerDisco
     3 s OR healthy heartbeat; lost = no audio AND heartbeat unreachable ~5 s; in between
     holds state) — a bare audio-window check fires false disconnect+connect pairs on
     2-second Wi-Fi/VPN stalls (`ReceiverController.updateCues`).
+11. SwiftUI `.swipeActions` and `.contextMenu` are NOT reliably exposed to VoiceOver
+    (macOS especially: swipe actions not at all). Any row operation offered there must
+    ALSO be an `.accessibilityAction(named:)` on the element VoiceOver focuses — see the
+    peer and profile rows in `ReceiverRootView`. Never ship a row action that exists
+    only as swipe/context menu.
 
 ## Architecture (everything shared lives in `RemSoundKit/Sources/RemSoundKit/`)
 

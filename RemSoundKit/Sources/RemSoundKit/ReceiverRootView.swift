@@ -185,7 +185,19 @@ public struct ReceiverRootView: View {
             }
         }
         .accessibilityLabel("\(profile.name), \(isApplied ? "currently applied, " : "")\(profileSummary(profile))")
-        .accessibilityHint("Double tap to apply this profile. Updating, renaming, and deleting are in the context menu.")
+        .accessibilityHint("Double tap to apply this profile. Updating, renaming, and deleting are available as actions.")
+        // Same VoiceOver rule as the peer rows: the context menu and swipe below are
+        // not reliably reachable with VoiceOver, so each operation is a custom action.
+        .accessibilityAction(named: "Save current settings to this profile") {
+            controller.updateProfile(id: profile.id)
+        }
+        .accessibilityAction(named: "Rename") {
+            renameText = profile.name
+            renamingProfileId = profile.id
+        }
+        .accessibilityAction(named: "Delete profile") {
+            controller.deleteProfile(id: profile.id)
+        }
         .contextMenu {
             Button("Save current settings to this profile") {
                 controller.updateProfile(id: profile.id)
@@ -327,21 +339,34 @@ public struct ReceiverRootView: View {
 
     @ViewBuilder
     private func peerRow(_ peer: PeerListEntry) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Toggle(isOn: Binding(
-                get: { peer.isSelected },
-                set: { controller.setPeerSelected(peer, selected: $0) }
-            )) {
-                VStack(alignment: .leading) {
-                    Text(peer.name)
-                    Text(peer.statusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+        // Swipe actions and context menus are pointer/touch conveniences only: SwiftUI
+        // does not reliably surface either to VoiceOver (on macOS swipe actions not at
+        // all), so every row operation must ALSO be an explicit custom accessibility
+        // action on the element VoiceOver focuses — the toggle.
+        let toggle = Toggle(isOn: Binding(
+            get: { peer.isSelected },
+            set: { controller.setPeerSelected(peer, selected: $0) }
+        )) {
+            VStack(alignment: .leading) {
+                Text(peer.name)
+                Text(peer.statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .accessibilityLabel("\(peer.name), \(peer.statusText)")
-            .accessibilityHint(peer.isSelected ? "Selected. Double tap to stop receiving from this peer."
-                                               : "Not selected. Double tap to receive audio from this peer.")
+        }
+        .accessibilityLabel("\(peer.name), \(peer.statusText)")
+        .accessibilityHint(peer.isSelected ? "Selected. Double tap to stop receiving from this peer."
+                                           : "Not selected. Double tap to receive audio from this peer.")
+
+        Group {
+            if let manualId = peer.manualPeerId {
+                toggle
+                    .accessibilityAction(named: "Remove peer") {
+                        controller.removeManualPeer(id: manualId)
+                    }
+            } else {
+                toggle
+            }
         }
         .contextMenu {
             if let manualId = peer.manualPeerId {
