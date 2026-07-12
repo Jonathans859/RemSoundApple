@@ -1,8 +1,13 @@
+import AppKit
 import RemSoundKit
 import SwiftUI
 
 /// macOS receiver app — lives in the menu bar (LSUIElement, no Dock icon), the same role the
-/// tray icon plays for the Windows app.
+/// tray icon plays for the Windows app. The status item is a real menu (not a popover):
+/// Show RemSound (W), Enable sending (S), Enable receiving (R), Exit RemSound (X) — the
+/// single-letter key equivalents work while the menu is open, which is also how VoiceOver
+/// users can fire them without hunting. The full UI lives in a regular window that
+/// "Show RemSound" opens; it does NOT open at launch (menu bar apps must start silent).
 ///
 /// The Shortcuts actions and App Shortcuts live in `Apps/Shared/RemSoundIntents.swift`,
 /// compiled into this target — they must NOT move into the RemSoundKit package (SPM-hosted
@@ -15,8 +20,7 @@ struct RemSoundMacApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            ReceiverRootView(controller: controller)
-                .frame(width: 400, height: 600)
+            StatusMenu(controller: controller)
         } label: {
             // The label is installed in the status bar at launch, so its task is our
             // app-did-launch hook: reception starts immediately, not on first menu open.
@@ -26,6 +30,53 @@ struct RemSoundMacApp: App {
                 }
                 .accessibilityLabel("RemSound")
         }
-        .menuBarExtraStyle(.window)
+
+        Window("RemSound", id: "main") {
+            ReceiverRootView(controller: controller)
+                .frame(minWidth: 400, minHeight: 500)
+        }
+        .defaultSize(width: 400, height: 600)
+        // A Window scene would otherwise open itself on first launch — this app must
+        // start as a bare menu bar item, so both launch and restoration stay silent.
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+    }
+}
+
+private struct StatusMenu: View {
+    @Bindable var controller: ReceiverController
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Show RemSound") {
+            openWindow(id: "main")
+            // An LSUIElement app is never frontmost on its own — without activation the
+            // window would open behind whatever app is active.
+            NSApp.activate()
+        }
+        .keyboardShortcut("w", modifiers: [])
+
+        Toggle("Enable sending", isOn: $controller.sendEnabled)
+            .keyboardShortcut("s", modifiers: [])
+
+        Toggle("Enable receiving", isOn: receiving)
+            .keyboardShortcut("r", modifiers: [])
+
+        Divider()
+
+        Button("Exit RemSound") {
+            NSApp.terminate(nil)
+        }
+        .keyboardShortcut("x", modifiers: [])
+    }
+
+    /// Receiving has no settable flag — it is the start()/stop() lifecycle. Stopping also
+    /// switches sending off (outbound audio uses the receiver's socket), and the menu's
+    /// checkboxes follow via observation.
+    private var receiving: Binding<Bool> {
+        Binding(
+            get: { controller.isRunning },
+            set: { $0 ? controller.start() : controller.stop() }
+        )
     }
 }

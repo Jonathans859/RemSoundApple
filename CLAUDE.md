@@ -142,7 +142,11 @@ doubt read `src/RemSound.Core/` (`RemPacket.cs`, `RemSoundCrypto.cs`, `PeerDisco
   options; a persistent top-right About button opens `AboutView.swift`, which links to this
   repo and the official Windows repo), `Settings.swift` (UserDefaults + Keychain).
 - `Apps/iOS`, `Apps/macOS`: thin entry points. iOS has the `audio` background mode; macOS
-  is a `MenuBarExtra` (LSUIElement) whose **label view's `.task`** is the launch hook.
+  is a `MenuBarExtra` (LSUIElement) whose **label view's `.task`** is the launch hook. The
+  status item is a real menu — Show RemSound (W), Enable sending (S), Enable receiving (R),
+  Exit RemSound (X), bare-letter key equivalents — and the full UI is a `Window` scene
+  (id "main") with `.defaultLaunchBehavior(.suppressed)` so launch stays silent; opening
+  it must also `NSApp.activate()` or the window appears behind the frontmost app.
 
 Known v1 simplifications (intentional): linear resampler for non-48k PCM senders, no drift
 resampler (upstream v3.9.1 also added buffer-depth feedback to theirs — port both together
