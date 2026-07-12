@@ -382,10 +382,22 @@ public struct ReceiverRootView: View {
             }
             Toggle("Mute", isOn: $controller.isMuted)
 
-            Stepper(value: $controller.targetLatencyMs, in: 5...500, step: 5) {
-                Text("Maximum delay: \(controller.targetLatencyMs) milliseconds")
+            HStack {
+                Text("Maximum delay")
+                Slider(value: Binding(
+                    get: { Double(controller.targetLatencyMs) },
+                    set: { controller.targetLatencyMs = Int($0) }
+                ), in: 5...500, step: 5)
+                    .accessibilityLabel("Maximum delay")
+                    .accessibilityValue("\(controller.targetLatencyMs) milliseconds")
+                    .accessibilityHint("Lower is faster but needs a steadier network. The Windows app default is 80 milliseconds.")
+                Text("\(controller.targetLatencyMs) ms")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    // The slider already speaks the value; a second element reading
+                    // "500 ms" with no label would just be noise.
+                    .accessibilityHidden(true)
             }
-            .accessibilityHint("Lower is faster but needs a steadier network. The Windows app default is 80 milliseconds.")
 
             Toggle("Connection sounds", isOn: $controller.cuesEnabled)
                 .accessibilityHint("Plays a sound when a peer connects or disconnects")
