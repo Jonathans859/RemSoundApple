@@ -69,6 +69,13 @@ doubt read `src/RemSound.Core/` (`RemPacket.cs`, `RemSoundCrypto.cs`, `PeerDisco
   selected peer (two paths of one machine would double its sessions). Outbound audio uses
   the receiver's socket. The send toggle is deliberately NOT persisted — the mic never goes
   hot at launch.
+- **Send and receive are independent** (Windows v5 parity, 2026-07-12): the socket,
+  heartbeats, and discovery run for the app's lifetime (`controller.start()` at launch);
+  "Receive audio" (`receiveEnabled`, persisted, default on) gates playback ONLY —
+  `engine.setPlaybackEnabled` flips the gate first, then disposes sessions. `AudioOutput`
+  deliberately stays running: stopping it deactivates the shared iOS audio session, which
+  would kill an active mic capture and background survival. Discovery announces the live
+  CanSend/CanReceive and re-announces immediately on a toggle change.
 - iOS 18 / macOS 15 minimum; **one shared bundle id** `com.jonathan859.remsound` for both
   platforms = one App Store Connect app record, universal purchase (iOS renamed from
   `.ios` 2026-07-03; macOS renamed from `.mac` 2026-07-11 — both pre-ship). The macOS

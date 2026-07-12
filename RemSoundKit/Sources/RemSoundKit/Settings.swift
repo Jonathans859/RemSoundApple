@@ -67,6 +67,13 @@ public final class ReceiverSettings {
         set { defaults.set(newValue, forKey: "cuesEnabled") }
     }
 
+    /// The "Receive audio" playback toggle — persisted like the Windows checkbox. Default
+    /// on. (The send toggle is deliberately NOT persisted — the mic never goes hot at launch.)
+    public var receiveEnabled: Bool {
+        get { defaults.object(forKey: "receiveEnabled") == nil ? true : defaults.bool(forKey: "receiveEnabled") }
+        set { defaults.set(newValue, forKey: "receiveEnabled") }
+    }
+
     /// iOS: hold the audio session exclusively (no `.mixWithOthers`) so playback — and the
     /// UDP socket under it — survives the screen locking. Default off = mix-friendly.
     public var exclusiveAudio: Bool {

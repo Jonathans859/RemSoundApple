@@ -51,7 +51,8 @@ public final class AudioReceiverEngine {
 
     /// Gate equivalent to the Windows "Receive audio" tick: when false the socket stays
     /// bound (heartbeats keep flowing) but Format/Audio packets are discarded pre-decode.
-    public var playbackEnabled = true
+    /// Read on the network thread under `lock`; set via `setPlaybackEnabled`.
+    private var playbackEnabled = true
 
     public init() {}
 
@@ -70,6 +71,28 @@ public final class AudioReceiverEngine {
         audioKey = key
         audioFingerprint = fingerprint
         lock.unlock()
+    }
+
+    /// Mirrors Windows `AudioReceiver.SetPlaybackEnabled` (single-port model): disabling
+    /// flips the gate FIRST — so in-flight packets on the network thread can't open a fresh
+    /// session mid-teardown — then disposes every open session, so a later re-enable starts
+    /// clean instead of draining stale audio. The socket and heartbeat routing are untouched.
+    public func setPlaybackEnabled(_ enabled: Bool) {
+        var closed: [StreamSession] = []
+        lock.lock()
+        let changed = playbackEnabled != enabled
+        playbackEnabled = enabled
+        if changed && !enabled {
+            closed = Array(sessions.values)
+            sessions.removeAll()
+        }
+        lock.unlock()
+        guard changed else { return }
+        for session in closed {
+            mixer.removeSession(endpoint: session.endpoint, streamId: session.streamId)
+        }
+        onDiagnostic?(enabled ? "playback enabled" : "playback disabled — \(closed.count) session(s) closed")
+        if !closed.isEmpty { onSessionsChanged?() }
     }
 
     public func setAllowedSenders(_ addresses: Set<UInt32>?) {
@@ -183,11 +206,12 @@ public final class AudioReceiverEngine {
     }
 
     private func handleFormat(remote: UDPEndpoint, streamId: UInt16, payload: ArraySlice<UInt8>) {
-        guard playbackEnabled else { return }
         guard let (format, fingerprint) = RemPacket.readFormat(payload) else { return }
 
         lock.lock()
-        guard isSenderAllowed(remote) else {
+        // Gate read under the lock: setPlaybackEnabled(false) flips it before disposing
+        // sessions, so a packet racing the teardown can't open a fresh one.
+        guard playbackEnabled, isSenderAllowed(remote) else {
             lock.unlock()
             return
         }
@@ -243,9 +267,8 @@ public final class AudioReceiverEngine {
     }
 
     private func handleAudio(remote: UDPEndpoint, streamId: UInt16, sequence: UInt32, payload: ArraySlice<UInt8>) {
-        guard playbackEnabled else { return }
         lock.lock()
-        guard isSenderAllowed(remote) else {
+        guard playbackEnabled, isSenderAllowed(remote) else {
             lock.unlock()
             return
         }

@@ -67,17 +67,17 @@ struct ToggleMuteIntent: AppIntent {
 
 struct ToggleReceivingIntent: AppIntent {
     static let title: LocalizedStringResource = "Toggle Receiving"
-    static let description = IntentDescription("Stops listening for RemSound senders if receiving, starts if stopped.")
+    static let description = IntentDescription("Stops playing audio from RemSound senders if receiving, starts if stopped.")
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let controller = ReceiverController.shared
-        if controller.isRunning {
-            controller.stop()
+        if controller.receiveEnabled {
+            controller.receiveEnabled = false
             return .result(dialog: "Receiving off")
         } else {
-            controller.start()
-            if let error = controller.lastError {
+            controller.receiveEnabled = true
+            if !controller.isRunning, let error = controller.lastError {
                 return .result(dialog: "Could not start receiving: \(error)")
             }
             return .result(dialog: "Receiving on")
@@ -109,7 +109,7 @@ struct SetMutedIntent: AppIntent {
 
 struct SetReceivingIntent: AppIntent {
     static let title: LocalizedStringResource = "Turn Receiving On or Off"
-    static let description = IntentDescription("Starts or stops listening for RemSound senders.")
+    static let description = IntentDescription("Starts or stops playing audio from RemSound senders.")
 
     @Parameter(title: "On")
     var on: Bool
@@ -121,14 +121,13 @@ struct SetReceivingIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let controller = ReceiverController.shared
+        controller.receiveEnabled = on
         if on {
-            controller.start()
-            if let error = controller.lastError {
+            if !controller.isRunning, let error = controller.lastError {
                 return .result(dialog: "Could not start receiving: \(error)")
             }
             return .result(dialog: "Receiving on")
         } else {
-            controller.stop()
             return .result(dialog: "Receiving off")
         }
     }

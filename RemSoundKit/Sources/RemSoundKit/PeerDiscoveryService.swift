@@ -78,6 +78,10 @@ public final class PeerDiscoveryService {
     private var audioPort: UInt16 = RemPacket.defaultPort
     private var displayName: String = "Apple device"
     private var unicastTargets: [UInt32] = []
+    /// Advertised capabilities — the live send/receive toggles, like Windows (its
+    /// UpdateCapabilities re-announces on every checkbox change). Guarded by `lock`.
+    private var canSend = true
+    private var canReceive = true
 
     /// Fired (on an arbitrary queue) whenever the visible peer set changes.
     public var onPeersChanged: (() -> Void)?
@@ -133,6 +137,18 @@ public final class PeerDiscoveryService {
         socket = nil
     }
 
+    /// Update the advertised CanSend/CanReceive flags and re-announce immediately so peers
+    /// learn the change now, not up to 1.5 s later (Windows `UpdateCapabilities` parity).
+    public func setCapabilities(canSend: Bool, canReceive: Bool) {
+        lock.lock()
+        let changed = self.canSend != canSend || self.canReceive != canReceive
+        self.canSend = canSend
+        self.canReceive = canReceive
+        lock.unlock()
+        guard changed else { return }
+        timerQueue.async { [weak self] in self?.sendAnnouncement() }
+    }
+
     /// Replace the set of IPs that announcements are unicast to (manual/remembered peers).
     public func setUnicastPeerAddresses(_ addresses: [UInt32]) {
         lock.lock()
@@ -153,9 +169,13 @@ public final class PeerDiscoveryService {
 
     private func sendAnnouncement() {
         guard let socket else { return }
+        lock.lock()
+        let announceCanSend = canSend
+        let announceCanReceive = canReceive
+        lock.unlock()
         let message = DiscoveryMessage(
             InstanceId: instanceId, Name: displayName, AudioPort: Int(audioPort),
-            CanSend: true, CanReceive: true)
+            CanSend: announceCanSend, CanReceive: announceCanReceive)
         guard let json = try? JSONEncoder().encode(message) else { return }
 
         for target in NetworkInterfaces.broadcastAddresses(port: Self.defaultDiscoveryPort) {

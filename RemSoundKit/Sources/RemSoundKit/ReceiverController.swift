@@ -53,11 +53,29 @@ public final class ReceiverController {
     public private(set) var sendStatus = ""
 
     /// Microphone sending on/off. Deliberately NOT persisted — the microphone never goes
-    /// hot just because the app launched; the user flips it each session.
+    /// hot just because the app launched; the user flips it each session. Independent of
+    /// `receiveEnabled` (Windows parity): both ride the always-bound audio socket.
     public var sendEnabled = false {
         didSet {
             guard sendEnabled != oldValue else { return }
             if sendEnabled { startSending() } else { stopSending() }
+            discovery.setCapabilities(canSend: sendEnabled, canReceive: receiveEnabled)
+        }
+    }
+
+    /// Playback of received audio — the Windows "Receive audio" checkbox. Gates ONLY
+    /// playback: the socket, heartbeats, and discovery stay up regardless (single-port
+    /// model — see the Windows AudioReceiver's SetPlaybackEnabled), so sending and peer
+    /// health keep working while this is off, and peers see an honest CanReceive flag.
+    /// Persisted, default on.
+    public var receiveEnabled: Bool {
+        didSet {
+            guard receiveEnabled != oldValue else { return }
+            settings.receiveEnabled = receiveEnabled
+            engine.setPlaybackEnabled(receiveEnabled)
+            discovery.setCapabilities(canSend: sendEnabled, canReceive: receiveEnabled)
+            if receiveEnabled && !isRunning { start() }
+            refreshNow()
         }
     }
 
@@ -176,14 +194,16 @@ public final class ReceiverController {
         cuesEnabled = settings.cuesEnabled
         password = settings.password
         exclusiveAudio = settings.exclusiveAudio
+        receiveEnabled = settings.receiveEnabled
         output = AudioOutput(mixer: engine.mixer)
 
         mixer.volume = volume
         mixer.setTargetLatencyMs(targetLatencyMs)
         cues.enabled = cuesEnabled
-        // didSet does not fire for the assignment above (init), so push the persisted
-        // exclusive-audio choice into the output explicitly.
+        // didSet does not fire for the assignments above (init), so push the persisted
+        // exclusive-audio and receive-playback choices into the services explicitly.
         output.setExclusiveAudio(exclusiveAudio)
+        engine.setPlaybackEnabled(receiveEnabled)
 
         engine.onHeartbeatReceived = { [heartbeat] buffer, length, remote in
             heartbeat.handleInjectedPacket(buffer, length: length, remote: remote)
@@ -243,6 +263,7 @@ public final class ReceiverController {
         }
         heartbeat.start()
         discovery.start(displayName: Self.deviceName(), audioPort: settings.listenPort)
+        discovery.setCapabilities(canSend: sendEnabled, canReceive: receiveEnabled)
         isRunning = true
         applyPeerSelection()
         resolveManualPeers()
@@ -822,6 +843,11 @@ public final class ReceiverController {
     private func updateSummary() {
         if !isRunning {
             statusSummary = "Stopped"
+            return
+        }
+        if !receiveEnabled {
+            // Sending and peer connections keep working — say so instead of "Stopped".
+            statusSummary = "Receiving is off — peers stay connected"
             return
         }
         let receivingCount = audibleAddresses.count

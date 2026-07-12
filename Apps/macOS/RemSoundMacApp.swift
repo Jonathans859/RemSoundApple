@@ -56,10 +56,12 @@ private struct StatusMenu: View {
         }
         .keyboardShortcut("w", modifiers: [])
 
+        // Independent checkboxes (Windows parity): receiving gates playback only, sending
+        // rides the always-bound socket — either can be on without the other.
         Toggle("Enable sending", isOn: $controller.sendEnabled)
             .keyboardShortcut("s", modifiers: [])
 
-        Toggle("Enable receiving", isOn: receiving)
+        Toggle("Enable receiving", isOn: $controller.receiveEnabled)
             .keyboardShortcut("r", modifiers: [])
 
         Divider()
@@ -68,15 +70,5 @@ private struct StatusMenu: View {
             NSApp.terminate(nil)
         }
         .keyboardShortcut("x", modifiers: [])
-    }
-
-    /// Receiving has no settable flag — it is the start()/stop() lifecycle. Stopping also
-    /// switches sending off (outbound audio uses the receiver's socket), and the menu's
-    /// checkboxes follow via observation.
-    private var receiving: Binding<Bool> {
-        Binding(
-            get: { controller.isRunning },
-            set: { $0 ? controller.start() : controller.stop() }
-        )
     }
 }

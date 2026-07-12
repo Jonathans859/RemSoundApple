@@ -111,13 +111,10 @@ public struct ReceiverRootView: View {
                 .accessibilityLabel("Status: \(controller.statusSummary)")
                 .accessibilityAddTraits(.updatesFrequently)
 
-            Toggle(isOn: Binding(
-                get: { controller.isRunning },
-                set: { running in running ? controller.start() : controller.stop() }
-            )) {
+            Toggle(isOn: $controller.receiveEnabled) {
                 Text("Receive audio")
             }
-            .accessibilityHint("Starts or stops listening for RemSound senders")
+            .accessibilityHint("Plays audio from RemSound senders. Turning this off keeps peers connected and sending available.")
 
             if let error = controller.lastError {
                 Text(error)
