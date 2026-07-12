@@ -59,14 +59,15 @@ public final class ReceiverController {
     /// methods below, which keep `ProfileStore` in sync.
     public private(set) var profiles: [ReceiverProfile] = []
 
-    /// Microphone sending on/off. Not persisted as a live setting — the user flips it
-    /// each session — but profiles record it, and a startup profile saved with sending on
-    /// starts the mic at launch (user decision 2026-07-12; see `startupSendPending`).
-    /// Independent of `receiveEnabled` (Windows parity): both ride the always-bound
-    /// audio socket.
+    /// Microphone sending on/off — persisted like the receive toggle (user decision
+    /// 2026-07-12: the old "never persist send" rule is retired). Sending saved as on
+    /// resumes at launch, via `startupSendPending`: capture can only start once the
+    /// engines are up, at the end of the first `start()`. Independent of
+    /// `receiveEnabled` (Windows parity): both ride the always-bound audio socket.
     public var sendEnabled = false {
         didSet {
             guard sendEnabled != oldValue else { return }
+            settings.sendEnabled = sendEnabled
             if sendEnabled { startSending() } else { stopSending() }
             discovery.setCapabilities(canSend: sendEnabled, canReceive: receiveEnabled)
         }
@@ -177,9 +178,10 @@ public final class ReceiverController {
 
     private var manualPeers: [ManualPeer]
     private var selectedAddresses: Set<String>
-    /// The startup profile was saved with sending on — honoured at the end of the first
-    /// `start()`, once the engines and discovery are up (flipping `sendEnabled` any
-    /// earlier re-enters `start()` from its didSet).
+    /// The persisted send toggle (possibly just rewritten by a startup profile) was on at
+    /// launch — honoured at the end of the first `start()`, once the engines and
+    /// discovery are up (flipping `sendEnabled` any earlier re-enters `start()` from its
+    /// didSet). Consumed once; a later stop()/start() never resurrects it.
     private var startupSendPending = false
     /// Monotonic token guarding async PBKDF2 results — see `applyPassword`.
     private var passwordGeneration = 0
@@ -212,12 +214,8 @@ public final class ReceiverController {
 
     public init() {
         // Startup profile (if configured): rewrite the persisted settings BEFORE they are
-        // read below — rewriting-then-loading avoids every didSet/engine side effect. The
-        // profile applies exactly as saved, send toggle included; send has no persisted
-        // setting behind it, so it is carried by the returned profile and honoured at the
-        // end of the first start().
-        let launchProfile = ProfileStore().applyStartupProfile(to: ReceiverSettings())
-        startupSendPending = launchProfile?.sendEnabled ?? false
+        // read below — rewriting-then-loading avoids every didSet/engine side effect.
+        ProfileStore().applyStartupProfile(to: ReceiverSettings())
 
         manualPeers = settings.manualPeers
         selectedAddresses = settings.selectedPeerAddresses
@@ -229,6 +227,10 @@ public final class ReceiverController {
         password = settings.password
         exclusiveAudio = settings.exclusiveAudio
         receiveEnabled = settings.receiveEnabled
+        // Loaded into the pending flag, not sendEnabled itself: capture must not start
+        // until the engines are up (end of the first start()); didSet is skipped in init
+        // anyway, so assigning sendEnabled here would show "on" without ever sending.
+        startupSendPending = settings.sendEnabled
         output = AudioOutput(mixer: engine.mixer)
 
         mixer.volume = volume
@@ -310,7 +312,7 @@ public final class ReceiverController {
         }
         refreshNow()
 
-        // Startup profile saved with sending on: turn the mic on now, exactly as saved.
+        // Send was persisted as on (directly or via a startup profile): resume it now.
         // isRunning is already true, so the sendEnabled didSet cannot re-enter start().
         if startupSendPending {
             startupSendPending = false

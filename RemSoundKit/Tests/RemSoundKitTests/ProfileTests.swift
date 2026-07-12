@@ -77,19 +77,23 @@ final class ProfileTests: XCTestCase {
         settings.receiveEnabled = false
         settings.targetLatencyMs = 45
 
-        let applied = store.applyStartupProfile(to: settings)
+        store.applyStartupProfile(to: settings)
 
         XCTAssertEqual(settings.manualPeers, profile.manualPeers)
         XCTAssertEqual(settings.selectedPeerAddresses, Set(profile.selectedPeerAddresses))
         XCTAssertTrue(settings.receiveEnabled)
+        XCTAssertTrue(settings.sendEnabled) // exactly as saved — sending resumes at launch
         XCTAssertEqual(settings.selectedMicrophoneId, "mic-1")
         XCTAssertEqual(settings.targetLatencyMs, 120)
         // Now the active profile — feeds the .lastApplied mode.
         XCTAssertEqual(settings.lastAppliedProfileId, profile.id)
-        // Send has no persisted setting; the returned profile carries it so the
-        // controller can start the mic at the end of the first start().
-        XCTAssertEqual(applied, profile)
-        XCTAssertTrue(applied?.sendEnabled ?? false)
+    }
+
+    func testSendToggleIsPersisted() {
+        let settings = ReceiverSettings(defaults: defaults)
+        XCTAssertFalse(settings.sendEnabled) // default off
+        settings.sendEnabled = true
+        XCTAssertTrue(ReceiverSettings(defaults: defaults).sendEnabled)
     }
 
     func testApplyStartupProfileLastAppliedUsesTheRememberedProfile() {
@@ -102,7 +106,7 @@ final class ProfileTests: XCTestCase {
         settings.startupProfile = .lastApplied
         settings.lastAppliedProfileId = travel.id
 
-        XCTAssertEqual(store.applyStartupProfile(to: settings), travel)
+        store.applyStartupProfile(to: settings)
 
         XCTAssertEqual(settings.targetLatencyMs, 200)
         XCTAssertEqual(settings.lastAppliedProfileId, travel.id)
@@ -113,16 +117,17 @@ final class ProfileTests: XCTestCase {
         let settings = ReceiverSettings(defaults: defaults)
         settings.targetLatencyMs = 45
 
-        XCTAssertNil(store.applyStartupProfile(to: settings)) // off (default)
+        store.applyStartupProfile(to: settings) // off (default)
         XCTAssertEqual(settings.targetLatencyMs, 45)
 
         settings.startupProfile = .fixed(UUID()) // references no stored profile
-        XCTAssertNil(store.applyStartupProfile(to: settings))
+        store.applyStartupProfile(to: settings)
         XCTAssertEqual(settings.targetLatencyMs, 45)
 
         settings.startupProfile = .lastApplied // nothing applied yet
-        XCTAssertNil(store.applyStartupProfile(to: settings))
+        store.applyStartupProfile(to: settings)
         XCTAssertEqual(settings.targetLatencyMs, 45)
+        XCTAssertFalse(settings.sendEnabled)
     }
 
     func testEncodedProfileJsonNeverContainsAPassword() throws {

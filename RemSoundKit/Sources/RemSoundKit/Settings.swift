@@ -67,12 +67,17 @@ public final class ReceiverSettings {
         set { defaults.set(newValue, forKey: "cuesEnabled") }
     }
 
-    /// The "Receive audio" playback toggle — persisted like the Windows checkbox. Default
-    /// on. (The send toggle has no setting here — the user flips it each session; profiles
-    /// record it, and a startup profile saved with sending on starts the mic at launch.)
+    /// The "Receive audio" playback toggle — persisted like the Windows checkbox. Default on.
     public var receiveEnabled: Bool {
         get { defaults.object(forKey: "receiveEnabled") == nil ? true : defaults.bool(forKey: "receiveEnabled") }
         set { defaults.set(newValue, forKey: "receiveEnabled") }
+    }
+
+    /// The "Send microphone" toggle — persisted since 2026-07-12 (the earlier
+    /// "never persist send" rule is retired). Default off; absent key reads false.
+    public var sendEnabled: Bool {
+        get { defaults.bool(forKey: "sendEnabled") }
+        set { defaults.set(newValue, forKey: "sendEnabled") }
     }
 
     /// iOS: hold the audio session exclusively (no `.mixWithOthers`) so playback — and the

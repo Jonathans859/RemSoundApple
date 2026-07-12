@@ -78,26 +78,24 @@ public final class ProfileStore {
     /// Launch-time profile application: rewrites the persisted live settings in place,
     /// BEFORE `ReceiverController` reads them, so no property observers or engines are
     /// involved (applying through the controller's didSets during startup re-enters
-    /// `start()`). Returns the applied profile so the controller can honour its send
-    /// toggle — the one profile field with no persisted setting behind it — once the
-    /// engines are up.
-    @discardableResult
-    public func applyStartupProfile(to settings: ReceiverSettings) -> ReceiverProfile? {
+    /// `start()`). Every profile field has a persisted setting behind it, so the rewrite
+    /// covers the whole profile — send included.
+    public func applyStartupProfile(to settings: ReceiverSettings) {
         let profileId: UUID?
         switch settings.startupProfile {
-        case .off: return nil
+        case .off: return
         case .lastApplied: profileId = settings.lastAppliedProfileId
         case .fixed(let id): profileId = id
         }
         guard let profileId,
-              let profile = profiles.first(where: { $0.id == profileId }) else { return nil }
+              let profile = profiles.first(where: { $0.id == profileId }) else { return }
         settings.manualPeers = profile.manualPeers
         settings.selectedPeerAddresses = Set(profile.selectedPeerAddresses)
         settings.receiveEnabled = profile.receiveEnabled
+        settings.sendEnabled = profile.sendEnabled
         settings.selectedMicrophoneId = profile.selectedMicrophoneId
         settings.targetLatencyMs = profile.targetLatencyMs
         settings.password = password(forProfile: profileId)
         settings.lastAppliedProfileId = profileId
-        return profile
     }
 }
