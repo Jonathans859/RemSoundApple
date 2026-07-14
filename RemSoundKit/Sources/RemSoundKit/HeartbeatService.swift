@@ -46,7 +46,10 @@ public final class HeartbeatService {
         defer { lock.unlock() }
         guard timer == nil else { return }
         let t = DispatchSource.makeTimerSource(queue: timerQueue)
-        t.schedule(deadline: .now() + Self.pingInterval, repeating: Self.pingInterval)
+        // 200 ms leeway lets the kernel coalesce this wakeup with the other periodic timers
+        // and the audio callbacks (battery). Ample headroom: the health windows are 2 s / 5 s.
+        t.schedule(deadline: .now() + Self.pingInterval, repeating: Self.pingInterval,
+                   leeway: .milliseconds(200))
         t.setEventHandler { [weak self] in self?.sendPings() }
         t.resume()
         timer = t

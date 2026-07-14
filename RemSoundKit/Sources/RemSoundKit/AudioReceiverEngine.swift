@@ -153,7 +153,9 @@ public final class AudioReceiverEngine {
         startDate = Date()
 
         let timer = DispatchSource.makeTimerSource(queue: timerQueue)
-        timer.schedule(deadline: .now() + 1, repeating: 1)
+        // 200 ms leeway so this idle-session prune coalesces with the other periodic timers
+        // and audio callbacks (battery); the session idle timeout is seconds, so it is noise.
+        timer.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(200))
         timer.setEventHandler { [weak self] in self?.pruneIdleSessions() }
         timer.resume()
         pruneTimer = timer

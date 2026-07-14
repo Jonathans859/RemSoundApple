@@ -329,7 +329,10 @@ public final class ReceiverController {
 
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
+                // 200 ms tolerance lets this UI-refresh wakeup coalesce with the heartbeat,
+                // discovery, and prune timers and the audio callbacks (battery); the refresh
+                // is cosmetic-cadence, so a little jitter is invisible.
+                try? await Task.sleep(for: .seconds(1), tolerance: .milliseconds(200))
                 self?.refreshNow()
             }
         }

@@ -124,7 +124,10 @@ public final class PeerDiscoveryService {
         socket = sock
 
         let timer = DispatchSource.makeTimerSource(queue: timerQueue)
-        timer.schedule(deadline: .now(), repeating: Self.announceInterval)
+        // 200 ms leeway lets the kernel coalesce this announce with the heartbeat/prune
+        // timers and audio callbacks (battery). Peer expiry is 8 s, so this is noise.
+        timer.schedule(deadline: .now(), repeating: Self.announceInterval,
+                       leeway: .milliseconds(200))
         timer.setEventHandler { [weak self] in self?.sendAnnouncement() }
         timer.resume()
         announceTimer = timer
