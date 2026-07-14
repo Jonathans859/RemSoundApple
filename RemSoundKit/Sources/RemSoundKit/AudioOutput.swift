@@ -53,10 +53,13 @@ public final class AudioOutput {
 #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         applySessionCategory()
-        // 48 kHz to match the wire mix rate; ~5 ms IO buffer for low output latency. Both
-        // are preferences — the OS may give us less aggressive values on some routes.
+        // 48 kHz to match the wire mix rate. The IO buffer duration is a preference (the OS
+        // may give us a less aggressive value on some routes) and is now demand-adaptive —
+        // see `setLowLatencyDemand`. At launch nothing is flowing, so start on the idle
+        // (long) buffer; the controller raises the low-latency value the moment a session
+        // opens or capture starts.
         try? session.setPreferredSampleRate(48_000)
-        try? session.setPreferredIOBufferDuration(0.005)
+        applyPreferredIOBufferDuration()
         try session.setActive(true)
         installSessionObservers()
 #endif
@@ -139,6 +142,33 @@ public final class AudioOutput {
         applySessionCategory()
         // The category change re-routes audio, which can stop a running engine.
         if let engine, !engine.isRunning { try? engine.start() }
+    }
+
+    /// Adaptive IO buffer duration (battery). The render callback fires once per IO buffer,
+    /// so a 5 ms buffer wakes the CPU ~200×/s — and the engine is deliberately never stopped
+    /// (locked decision: stopping deactivates the shared session, killing background survival
+    /// and any live mic capture). While NOTHING is flowing (no playout session and the mic
+    /// idle) that cadence renders pure silence, so we stretch the buffer to 100 ms (~10
+    /// wakeups/s); the moment demand appears we restore 5 ms. The switch-back latency is
+    /// masked by the jitter buffer filling at stream start, so it is never audible.
+    private static let lowLatencyIOBufferDuration = 0.005
+    private static let idleIOBufferDuration = 0.1
+    private var lowLatencyDemand = false
+
+    /// Raise (true) or lower (false) the render-callback cadence to match demand. Driven from
+    /// `ReceiverController` on the main actor off session open/close and mic start/stop —
+    /// NEVER from the render callback or any audio thread, since `setPreferredIOBufferDuration`
+    /// is AVAudioSession IPC.
+    public func setLowLatencyDemand(_ demand: Bool) {
+        guard lowLatencyDemand != demand else { return }
+        lowLatencyDemand = demand
+        guard isRunning else { return } // start() applies the right duration itself
+        applyPreferredIOBufferDuration()
+    }
+
+    private func applyPreferredIOBufferDuration() {
+        let duration = lowLatencyDemand ? Self.lowLatencyIOBufferDuration : Self.idleIOBufferDuration
+        try? AVAudioSession.sharedInstance().setPreferredIOBufferDuration(duration)
     }
 
     /// Whether the session is configured for simultaneous record + playback. Set BEFORE
@@ -272,5 +302,9 @@ public final class AudioOutput {
     /// macOS has no AVAudioSession — exclusive audio is an iOS-only concept; accept and
     /// ignore so the shared controller doesn't need platform conditionals.
     public func setExclusiveAudio(_ exclusive: Bool) {}
+
+    /// macOS has no AVAudioSession IO-buffer preference to adapt (the HAL negotiates it), so
+    /// the adaptive-cadence lever is iOS-only; accept and ignore for a uniform controller API.
+    public func setLowLatencyDemand(_ demand: Bool) {}
 #endif
 }

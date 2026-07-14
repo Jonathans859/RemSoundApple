@@ -116,6 +116,11 @@ public final class PlayoutMixer {
         lock.lock()
         let all = snapshot
         lock.unlock()
+        // No active sessions: the bus is already silence from the zero-fill above, so skip
+        // both the mix and the per-sample gain/limiter loop. This runs on the render thread
+        // ~200×/s (and around the clock — the engine never stops), so avoiding a full pass
+        // over known-zero output every callback is worth the early return.
+        if all.isEmpty { return }
         for session in all {
             session.readAdd(into: output, frames: frames)
         }

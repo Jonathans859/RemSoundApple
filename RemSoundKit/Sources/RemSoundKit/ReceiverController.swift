@@ -618,9 +618,20 @@ public final class ReceiverController {
         updateCues()
         refreshPeerList()
         updateSendTargets()
+        updateIOBufferDemand()
         updateSendStatus()
         updateSummary()
         updateConnectionDetails()
+    }
+
+    /// Battery (finding 1): the audio engine renders ~200×/s at the 5 ms low-latency IO
+    /// buffer and is deliberately never stopped. When nothing is flowing — no playout
+    /// session AND the mic is not capturing — that cadence is pure wakeup cost against a
+    /// silent bus, so drop the callback rate; restore it the moment audio appears. Only the
+    /// preferred IO buffer duration changes; the engine and audio session stay running
+    /// throughout (locked decision). iOS-effective, a no-op on macOS.
+    private func updateIOBufferDemand() {
+        output.setLowLatencyDemand(mixer.activeSessionCount > 0 || microphone.isRunning)
     }
 
     // MARK: - Microphone sending
