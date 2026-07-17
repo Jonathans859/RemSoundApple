@@ -254,17 +254,7 @@ public struct ReceiverRootView: View {
 
     private var startupProfileSection: some View {
         Section {
-            Picker("Apply at launch", selection: $controller.startupProfile) {
-                Text("No profile — settings as you left them")
-                    .tag(StartupProfileChoice.off)
-                Text("Last applied profile")
-                    .tag(StartupProfileChoice.lastApplied)
-                ForEach(controller.profiles) { profile in
-                    Text(profile.name).tag(StartupProfileChoice.fixed(profile.id))
-                }
-            }
-            .pickerStyle(.menu)
-            .accessibilityHint("Which profile the app applies each time it starts")
+            StartupProfilePicker(controller: controller)
         } header: {
             Text("At launch")
         } footer: {
@@ -450,23 +440,7 @@ public struct ReceiverRootView: View {
             Toggle("Send microphone", isOn: $controller.sendEnabled)
                 .accessibilityHint("Streams this device's microphone, encrypted, to the peers selected on the Connectivity tab")
 
-            Picker("Microphone", selection: $controller.selectedMicrophoneId) {
-                Text("System default").tag(String?.none)
-                ForEach(controller.availableMicrophones) { mic in
-                    Text(mic.name).tag(String?.some(mic.id))
-                }
-                // Keep a previously chosen input selectable while it's unplugged so the
-                // picker doesn't silently jump selections.
-                if let selected = controller.selectedMicrophoneId,
-                   !controller.availableMicrophones.contains(where: { $0.id == selected }) {
-                    Text("Previously selected input").tag(String?.some(selected))
-                }
-            }
-            // Explicit menu style: a pop-up button (macOS) / anchored menu (iOS) reads as
-            // one focusable "pop-up button" element under VoiceOver, instead of whatever
-            // presentation the automatic style resolves to in this Form.
-            .pickerStyle(.menu)
-            .accessibilityHint("Which microphone or input to send from")
+            MicrophonePicker(controller: controller)
 
             if !controller.sendStatus.isEmpty {
                 Text(controller.sendStatus)
@@ -489,5 +463,63 @@ public struct ReceiverRootView: View {
         } footer: {
             Text("All audio is encrypted end to end. Use the same password as the RemSound profile on the sending computer.")
         }
+    }
+}
+
+// MARK: - Pop-up pickers
+//
+// Both pickers below are their OWN View structs, and must stay that way (issue #3). Written
+// as computed properties of ReceiverRootView they were inlined into its body, which reads
+// 1 Hz refresh state (`trafficSummary` for the Connectivity tab's accessibility value, the
+// live status lines inside the tabs). Every tick therefore rebuilt the picker's content —
+// and rebuilding a *presented* menu's contents destroys the accessibility element the user
+// has focused, so VoiceOver and Full Keyboard Access were both thrown back onto the
+// backdrop's "Dismiss context menu" once a second and could never reach an option.
+//
+// As separate structs storing only the controller reference, SwiftUI diffs those stored
+// properties on a parent re-render, finds the same object, and skips these bodies entirely;
+// Observation re-runs them only when something they actually read changes. The parent still
+// re-renders every second by design (uptime and traffic rates are live) — the isolation is
+// what keeps the open menu stable underneath it.
+
+private struct StartupProfilePicker: View {
+    @Bindable var controller: ReceiverController
+
+    var body: some View {
+        Picker("Apply at launch", selection: $controller.startupProfile) {
+            Text("No profile — settings as you left them")
+                .tag(StartupProfileChoice.off)
+            Text("Last applied profile")
+                .tag(StartupProfileChoice.lastApplied)
+            ForEach(controller.profiles) { profile in
+                Text(profile.name).tag(StartupProfileChoice.fixed(profile.id))
+            }
+        }
+        .pickerStyle(.menu)
+        .accessibilityHint("Which profile the app applies each time it starts")
+    }
+}
+
+private struct MicrophonePicker: View {
+    @Bindable var controller: ReceiverController
+
+    var body: some View {
+        Picker("Microphone", selection: $controller.selectedMicrophoneId) {
+            Text("System default").tag(String?.none)
+            ForEach(controller.availableMicrophones) { mic in
+                Text(mic.name).tag(String?.some(mic.id))
+            }
+            // Keep a previously chosen input selectable while it's unplugged so the
+            // picker doesn't silently jump selections.
+            if let selected = controller.selectedMicrophoneId,
+               !controller.availableMicrophones.contains(where: { $0.id == selected }) {
+                Text("Previously selected input").tag(String?.some(selected))
+            }
+        }
+        // Explicit menu style: a pop-up button (macOS) / anchored menu (iOS) reads as
+        // one focusable "pop-up button" element under VoiceOver, instead of whatever
+        // presentation the automatic style resolves to in this Form.
+        .pickerStyle(.menu)
+        .accessibilityHint("Which microphone or input to send from")
     }
 }

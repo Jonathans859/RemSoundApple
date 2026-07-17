@@ -626,11 +626,16 @@ public final class ReceiverController {
         if visible { refreshNow() }
     }
 
+    \ Every published property this tick touches is assigned only when its value actually
+    // changed. `@Observable` fires its mutation on the *write*, not on the change, so an
+    // unguarded per-second assignment of an identical string wakes every view that reads it
+    // 60 times a minute for nothing — `peers` in particular is rebuilt below even while the
+    // app is backgrounded, which is where it spends most of its life.
     private func refreshNow() {
         guard isRunning else {
             refreshPeerList()
-            connectionDetails = []
-            trafficSummary = ""
+            if !connectionDetails.isEmpty { connectionDetails = [] }
+            if !trafficSummary.isEmpty { trafficSummary = "" }
             return
         }
         // Functional half — MUST run whether or not a UI is visible; this app spends most of
@@ -749,14 +754,13 @@ public final class ReceiverController {
     }
 
     private func updateSendStatus() {
-        guard sendEnabled else {
-            sendStatus = ""
-            return
-        }
-        if password.isEmpty {
-            sendStatus = "Set a password below to send — audio is always encrypted"
+        let text: String
+        if !sendEnabled {
+            text = ""
+        } else if password.isEmpty {
+            text = "Set a password below to send — audio is always encrypted"
         } else if sendTargetCount == 0 {
-            sendStatus = "No peers selected — tick a peer above to send to it"
+            text = "No peers selected — tick a peer above to send to it"
         } else {
             var status = "Sending microphone audio to \(sendTargetCount) peer\(sendTargetCount == 1 ? "" : "s")"
             // Capture cadence diagnostic: ~5 ms = smooth packet pacing; ~100 ms would
@@ -770,8 +774,9 @@ public final class ReceiverController {
             if dropped > 0 {
                 status += ". \(dropped) capture frames dropped"
             }
-            sendStatus = status
+            text = status
         }
+        if text != sendStatus { sendStatus = text }
     }
 
     private func updateConnectionDetails() {
@@ -825,8 +830,9 @@ public final class ReceiverController {
         }
         lines.append(String(format: "Receiving %.1f kB/s; sending %.1f kB/s", lastRxRateKBs, lastTxRateKBs))
         // Whole numbers for the spoken tab value — decimals are noise read aloud.
-        trafficSummary = String(format: "Receiving %.0f kilobytes per second, sending %.0f kilobytes per second",
-                                lastRxRateKBs, lastTxRateKBs)
+        let traffic = String(format: "Receiving %.0f kilobytes per second, sending %.0f kilobytes per second",
+                             lastRxRateKBs, lastTxRateKBs)
+        if traffic != trafficSummary { trafficSummary = traffic }
         lines.append(String(format: "Total received %.1f MB; sent %.1f MB",
                             Double(received) / 1_000_000, Double(sent) / 1_000_000))
 
@@ -854,7 +860,7 @@ public final class ReceiverController {
             }
         }
 
-        connectionDetails = lines
+        if lines != connectionDetails { connectionDetails = lines }
     }
 
     private static func formatDuration(_ interval: TimeInterval) -> String {
@@ -1008,7 +1014,7 @@ public final class ReceiverController {
                 statusText: statusText(addresses: resolved.map(\.address), selected: selected)))
         }
 
-        peers = entries
+        if entries != peers { peers = entries }
     }
 
     private func statusText(addresses: [UInt32], selected: Bool) -> String {
@@ -1046,23 +1052,23 @@ public final class ReceiverController {
     }
 
     private func updateSummary() {
+        let summary: String
         if !isRunning {
-            statusSummary = "Stopped"
-            return
-        }
-        if !receiveEnabled {
+            summary = "Stopped"
+        } else if !receiveEnabled {
             // Sending and peer connections keep working — say so instead of "Stopped".
-            statusSummary = "Receiving is off — peers stay connected"
-            return
-        }
-        let receivingCount = audibleAddresses.count
-        if receivingCount > 0 {
-            let buffer = mixer.currentBufferMs
-            statusSummary = "Receiving from \(receivingCount) peer\(receivingCount == 1 ? "" : "s") — buffer \(buffer) ms"
-        } else if password.isEmpty {
-            statusSummary = "Listening — set a password to receive audio"
+            summary = "Receiving is off — peers stay connected"
         } else {
-            statusSummary = "Listening on port \(settings.listenPort)"
+            let receivingCount = audibleAddresses.count
+            if receivingCount > 0 {
+                let buffer = mixer.currentBufferMs
+                summary = "Receiving from \(receivingCount) peer\(receivingCount == 1 ? "" : "s") — buffer \(buffer) ms"
+            } else if password.isEmpty {
+                summary = "Listening — set a password to receive audio"
+            } else {
+                summary = "Listening on port \(settings.listenPort)"
+            }
         }
+        if summary != statusSummary { statusSummary = summary }
     }
 }
