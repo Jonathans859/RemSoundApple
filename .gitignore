@@ -16,3 +16,6 @@ Package.resolved
 # Downloaded CI logs dropped into the repo for debugging
 logs_*/
 
+
+# Claude session notes (never committed)
+.claude-notes/
