@@ -9,6 +9,13 @@ name: TestFlight
 # version goes through Beta App Review before external testers see it — per platform,
 # and that wait is Apple-side and normal.
 #
+# Runner economics: the two signing jobs (macos-26, billed 10×) only ever archive, sign,
+# upload with skip_waiting, and attach the release asset — none of them wait on App Store
+# Connect processing. External distribution is the one step that needs the PROCESSED build
+# (a 5–15 min wait), so it lives in a separate `distribute` job on ubuntu-latest (1×),
+# which targets the already-uploaded builds by version + build number (no Xcode, no archive
+# files). This keeps the expensive runners busy only while they are actually building.
+#
 # Both platforms share ONE App Store Connect app record (universal purchase): the iOS and
 # macOS targets use the same bundle id com.jonathan859.remsound, and the app record must
 # have the macOS platform added (App Store Connect → RemSound → Add Platform) before the
@@ -60,6 +67,13 @@ jobs:
   testflight:
     name: Cloud-signed iOS build → TestFlight
     needs: test
+    # Version + build number are published so the Ubuntu `distribute` job can target this
+    # exact uploaded build by number, without a Mac runner or the archive files. The macOS
+    # job computes identical values (same formula, same commit, same run attempt), so one
+    # platform's outputs describe both builds.
+    outputs:
+      marketing: ${{ steps.version.outputs.marketing }}
+      build: ${{ steps.version.outputs.build }}
     # App Store Connect rejects uploads not built with the iOS 26 SDK (Xcode 26+), so this
     # job must run on the macOS 26 image — NOT macos-15 (Xcode 16.4 / iOS 18.5 SDK). Only
     # uploads have the SDK floor; tests and unsigned CI stay on the older image.
@@ -229,26 +243,25 @@ jobs:
             --changelog "$CHANGELOG" \
             --skip_waiting_for_build_processing true
 
-      - name: Upload to TestFlight and distribute to external testers
+      # On a release, upload with skip_waiting exactly like the push path — the build only
+      # has to APPEAR in App Store Connect here. External distribution needs the build
+      # PROCESSED (a 5–15 min wait), and that wait is moved to the `distribute` job on a
+      # 1× Ubuntu runner rather than idling this 10× macOS runner. The build still reaches
+      # internal testers via automatic distribution as soon as processing finishes.
+      - name: Upload to TestFlight (external distribution runs on the Ubuntu distribute job)
         if: github.event_name == 'release'
         env:
           RELEASE_NOTES: ${{ github.event.release.body }}
-          EXTERNAL_GROUPS: ${{ vars.TESTFLIGHT_EXTERNAL_GROUPS || 'Beta' }}
         run: |
           if [ -z "$RELEASE_NOTES" ]; then
-            echo "::error::Release body is empty — external distribution requires 'What to Test' text"
+            echo "::error::Release body is empty — 'What to Test' text is required"
             exit 1
           fi
-          # No skip_waiting here: adding the build to external groups requires the
-          # processed build, so pilot must sit out the 5–15 min App Store Connect
-          # processing. It then sets "What to Test", submits the first build of a new
-          # version to Beta App Review, and adds the build to the group(s).
           fastlane pilot upload \
             --ipa "${{ steps.version.outputs.ipa }}" \
             --api_key_path "$RUNNER_TEMP/asc/api_key.json" \
             --changelog "$RELEASE_NOTES" \
-            --distribute_external true \
-            --groups "$EXTERNAL_GROUPS"
+            --skip_waiting_for_build_processing true
 
       - name: Attach IPA to the GitHub release
         if: github.event_name == 'release'
@@ -446,14 +459,15 @@ jobs:
             --changelog "$CHANGELOG" \
             --skip_waiting_for_build_processing true
 
-      - name: Upload to TestFlight and distribute to external testers
+      # Same split as the iOS job: upload-only here (skip_waiting), external distribution
+      # on the Ubuntu `distribute` job so the processing wait does not idle a 10× runner.
+      - name: Upload to TestFlight (external distribution runs on the Ubuntu distribute job)
         if: github.event_name == 'release'
         env:
           RELEASE_NOTES: ${{ github.event.release.body }}
-          EXTERNAL_GROUPS: ${{ vars.TESTFLIGHT_EXTERNAL_GROUPS || 'Beta' }}
         run: |
           if [ -z "$RELEASE_NOTES" ]; then
-            echo "::error::Release body is empty — external distribution requires 'What to Test' text"
+            echo "::error::Release body is empty — 'What to Test' text is required"
             exit 1
           fi
           fastlane pilot upload \
@@ -461,8 +475,7 @@ jobs:
             --pkg "${{ steps.version.outputs.pkg }}" \
             --api_key_path "$RUNNER_TEMP/asc/api_key.json" \
             --changelog "$RELEASE_NOTES" \
-            --distribute_external true \
-            --groups "$EXTERNAL_GROUPS"
+            --skip_waiting_for_build_processing true
 
       - name: Attach PKG to the GitHub release
         if: github.event_name == 'release'
@@ -470,3 +483,72 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$TAG" "${{ steps.version.outputs.pkg }}" --clobber
+
+  # External distribution — the ONLY part that must wait out App Store Connect's 5–15 min
+  # build processing, moved off the 10× macOS runners onto a 1× Ubuntu runner. It needs no
+  # Xcode and no archive files: `pilot distribute` targets the builds the two signing jobs
+  # already uploaded, by marketing version + build number (published as their outputs), and
+  # adds them to the external tester group(s). Runs only for releases; the push path reaches
+  # internal testers straight from the signing jobs' skip_waiting upload.
+  distribute:
+    name: Distribute to external testers
+    needs: [testflight, testflight-macos]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_NOTES: ${{ github.event.release.body }}
+      EXTERNAL_GROUPS: ${{ vars.TESTFLIGHT_EXTERNAL_GROUPS || 'Beta' }}
+      MARKETING: ${{ needs.testflight.outputs.marketing }}
+      BUILD: ${{ needs.testflight.outputs.build }}
+    steps:
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install fastlane
+        run: gem install fastlane --no-document
+
+      - name: Write App Store Connect API key
+        env:
+          API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
+        run: |
+          jq -n --arg kid "${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}" \
+                --arg iss "${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}" \
+                --arg key "$API_PRIVATE_KEY" \
+            '{key_id: $kid, issuer_id: $iss, key: $key, duration: 1200, in_house: false}' \
+            > api_key.json
+
+      - name: Distribute both platforms to external testers
+        run: |
+          if [ -z "$RELEASE_NOTES" ]; then
+            echo "::error::Release body is empty — external distribution requires 'What to Test' text"
+            exit 1
+          fi
+          # distribute_only: no ipa/pkg, just point pilot at the already-uploaded build by
+          # version + number. Each platform is retried because a build uploaded minutes ago
+          # may still be processing in App Store Connect — pilot fails that race rather than
+          # waiting, so this is where the processing wait actually happens (now on 1×).
+          distribute() { # $1 = ios | osx
+            fastlane pilot distribute \
+              --app_identifier com.jonathan859.remsound \
+              --app_platform "$1" \
+              --app_version "$MARKETING" \
+              --build_number "$BUILD" \
+              --distribute_external true \
+              --groups "$EXTERNAL_GROUPS" \
+              --changelog "$RELEASE_NOTES" \
+              --notify_external_testers true \
+              --api_key_path api_key.json
+          }
+          for platform in ios osx; do
+            n=0
+            until distribute "$platform"; do
+              n=$((n + 1))
+              if [ "$n" -ge 5 ]; then
+                echo "::error::External distribution for $platform failed after $n attempts"
+                exit 1
+              fi
+              echo "Build not ready for $platform (attempt $n) — waiting 180s for App Store Connect processing"
+              sleep 180
+            done
+          done

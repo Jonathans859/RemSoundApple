@@ -92,8 +92,13 @@ see `.claude/agents/release-manager.md`). One-time Apple/secrets setup lives in 
    (The push also triggers a push-event TestFlight run for internal testers; that is
    expected and harmless alongside the release run.)
 7. Watch the run: `gh run list --workflow TestFlight --event release --limit 1`, then
-   `gh run watch <id> --exit-status` (the external-distribution step waits out the full
-   5–15 min App Store Connect processing). On failure, read the failed step's log
+   `gh run watch <id> --exit-status`. The run has FOUR jobs: tests, the two macos-26
+   signing jobs (archive + sign + upload + attach the release asset — these finish fast,
+   they no longer wait on processing), and a `distribute` job on `ubuntu-latest` that waits
+   out the 5–15 min (often much longer for macOS) App Store Connect processing and adds the
+   builds to the external group(s). The IPA/PKG attach to the release as soon as the
+   signing jobs finish, so a slow `distribute` no longer holds the assets hostage. On
+   failure, read the failed step's log
    (`gh run view <id> --log-failed`), fix, and either re-run
    (`gh run rerun <id> --failed`) for infra flakes / secret fixes or — for a
    `testflight.yml` change — delete the release + tag
