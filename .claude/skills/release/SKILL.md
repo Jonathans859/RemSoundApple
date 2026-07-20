@@ -129,6 +129,26 @@ see `.claude/agents/release-manager.md`). One-time Apple/secrets setup lives in 
   keychain" steps) so a Development identity is REUSED across runs — minting only happens
   on a cold cache or an expired (~1 year) certificate. If this error nonetheless recurs,
   check those cache steps are still restoring.
+- **macOS archive — "Your team has no devices from which to generate a provisioning
+  profile" + "no Mac App Development provisioning profiles"** (first hit 2026-07-20, the
+  iCloud profile-sync change): triggered by giving the macOS target an **App-ID-level
+  capability** (here `com.apple.developer.ubiquity-kvstore-identifier`). Plain entitlements
+  — App Sandbox, network client/server, audio input — need no provisioning profile, so the
+  macOS archive never asked for one before; an App-ID capability makes automatic signing
+  demand a *Mac App Development* profile for the archive step. Apple issues iOS development
+  profiles to a team with **zero registered devices but not Mac ones**, which is why the
+  iOS job kept passing while macOS failed. There is no Mac to register (development happens
+  on Windows), so this is a dead end, not a setup gap — do NOT go hunting in the portal,
+  the App ID and its iCloud capability are fine.
+  **Fix (already in `testflight.yml`)**: the macOS archive is **ad-hoc signed**
+  (`CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="-" PROVISIONING_PROFILE_SPECIFIER=""`), and
+  export does the real signing with the cloud-managed distribution certificate — a Mac App
+  Store profile is not device-bound. Note the intermediate trap: archiving with
+  `CODE_SIGNING_ALLOWED=NO` also clears the profile error but produces a binary with **no
+  entitlements**, which ASC rejects at upload with *"App sandbox not enabled … (90296)"*.
+  Ad-hoc signing is what embeds entitlements without contacting Apple. The
+  "Verify the archived app kept its entitlements" step exists to catch a regression here
+  at archive time instead of minutes later inside altool.
 - **Archive/export — "Cloud signing permission error" / "No profiles found"**: the App ID
   `com.jonathan859.remsound` and its App Store Connect app record must exist, and the API
   key must be **Admin** (App Manager is refused for cloud signing).
