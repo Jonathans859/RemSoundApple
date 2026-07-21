@@ -59,6 +59,7 @@ jobs:
   test:
     name: RemSoundKit unit tests
     runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - name: Run tests
@@ -78,6 +79,12 @@ jobs:
     # job must run on the macOS 26 image — NOT macos-15 (Xcode 16.4 / iOS 18.5 SDK). Only
     # uploads have the SDK floor; tests and unsigned CI stay on the older image.
     runs-on: macos-26
+    # Cap well under GitHub's 6 h job ceiling: a signing job that raises a SecurityAgent GUI
+    # prompt hangs a headless runner instead of failing, and now that the processing wait
+    # lives on the Ubuntu distribute job this job only archives, signs, uploads (skip_waiting),
+    # and attaches — 30 min is generous. (A v0.5.0 macOS run once idled the OLD in-job
+    # distribute wait until GitHub's 6 h ceiling cancelled it — this cap makes that fail fast.)
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
@@ -276,6 +283,8 @@ jobs:
     # Same image as the iOS job — App Store uploads want the newest Xcode/SDKs, and one
     # image keeps both signing jobs on the same toolchain.
     runs-on: macos-26
+    # Same cap and reasoning as the iOS signing job.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
@@ -495,6 +504,10 @@ jobs:
     needs: [testflight, testflight-macos]
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
+    # Hard ceiling. The retry loop below already bounds the wait (~90 min of polling), but a
+    # job-level cap guarantees a wedged pilot process can never run to GitHub's 6 h limit —
+    # cheap here (1× Ubuntu), but the discipline the signing jobs also follow.
+    timeout-minutes: 105
     env:
       RELEASE_NOTES: ${{ github.event.release.body }}
       EXTERNAL_GROUPS: ${{ vars.TESTFLIGHT_EXTERNAL_GROUPS || 'Beta' }}
@@ -540,12 +553,16 @@ jobs:
               --notify_external_testers true \
               --api_key_path api_key.json
           }
+          # 30 attempts × 180s ≈ 90 min of polling — sized for macOS processing, which is far
+          # slower than iOS (a v0.5.0 macOS build took over an hour). This is why the wait was
+          # worth moving off the 10× runner: on 1× Ubuntu, idling ~90 min is cheap. The job
+          # timeout-minutes above is the hard backstop if pilot wedges instead of failing.
           for platform in ios osx; do
             n=0
             until distribute "$platform"; do
               n=$((n + 1))
-              if [ "$n" -ge 5 ]; then
-                echo "::error::External distribution for $platform failed after $n attempts"
+              if [ "$n" -ge 30 ]; then
+                echo "::error::External distribution for $platform failed after $n attempts (~90 min) — the build may still be processing; rerun this job once App Store Connect finishes."
                 exit 1
               fi
               echo "Build not ready for $platform (attempt $n) — waiting 180s for App Store Connect processing"
