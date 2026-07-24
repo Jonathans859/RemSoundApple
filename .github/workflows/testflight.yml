@@ -30,6 +30,11 @@ name: TestFlight
 # Optional repository VARIABLE (Settings → Secrets and variables → Actions → Variables):
 #   TESTFLIGHT_EXTERNAL_GROUPS — comma-separated external TestFlight group names that
 #   releases are distributed to (defaults to "Beta"; must match App Store Connect exactly).
+#
+# Manual escape hatch (Actions tab → TestFlight → Run workflow): runs ONLY the `distribute`
+# job against a build that's already sitting in App Store Connect (from a past push or
+# release) — no rebuild, and you choose which single platform gets it. For when a release's
+# external distribution didn't reach one platform (e.g. it got stranded mid-processing).
 
 on:
   push:
@@ -47,6 +52,32 @@ on:
       - ".gitignore"
   release:
     types: [published]
+  # Manual escape hatch: (re)submit an ALREADY-UPLOADED build to external testers without
+  # rebuilding anything. Exists because the v0.5.0 release's macOS job once hung 6h waiting
+  # for App Store Connect processing and got cancelled before it ever reached this step —
+  # the .pkg had uploaded fine, it just never got assigned to the external group. Find the
+  # marketing version + build number on the build's App Store Connect page (or this
+  # workflow's own run logs — each signing job prints the values it used).
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform to distribute to external testers"
+        required: true
+        type: choice
+        options: [osx, ios, both]
+        default: osx
+      app_version:
+        description: "Marketing version of the already-uploaded build, e.g. 0.5.0"
+        required: true
+        type: string
+      build_number:
+        description: "Build number of the already-uploaded build, e.g. 79.0.1"
+        required: true
+        type: string
+      release_notes:
+        description: "\"What to Test\" text for external testers"
+        required: true
+        type: string
 
 permissions:
   contents: write # gh release upload
@@ -72,6 +103,8 @@ jobs:
   testflight:
     name: Cloud-signed iOS build → TestFlight
     needs: test
+    # workflow_dispatch only (re)distributes a build that's already uploaded — no rebuild.
+    if: github.event_name != 'workflow_dispatch'
     # Version + build number are published so the Ubuntu `distribute` job can target this
     # exact uploaded build by number, without a Mac runner or the archive files. The macOS
     # job computes identical values (same formula, same commit, same run attempt), so one
@@ -284,6 +317,8 @@ jobs:
   testflight-macos:
     name: Cloud-signed macOS build → TestFlight
     needs: test
+    # workflow_dispatch only (re)distributes a build that's already uploaded — no rebuild.
+    if: github.event_name != 'workflow_dispatch'
     # Same image as the iOS job — App Store uploads want the newest Xcode/SDKs, and one
     # image keeps both signing jobs on the same toolchain.
     runs-on: macos-26
@@ -506,17 +541,32 @@ jobs:
   distribute:
     name: Distribute to external testers
     needs: [testflight, testflight-macos]
-    if: github.event_name == 'release'
+    # workflow_dispatch skips the two signing jobs above on purpose (see their `if`), so they
+    # report 'skipped' rather than 'success' — the default needs-all-succeeded check would
+    # skip this job too. always() plus an explicit per-job success-or-skipped test lets a
+    # manual redistribute run standalone, targeting a build the signing jobs never touch.
+    if: |
+      always() &&
+      (github.event_name == 'release' || github.event_name == 'workflow_dispatch') &&
+      (needs.testflight.result == 'success' || needs.testflight.result == 'skipped') &&
+      (needs['testflight-macos'].result == 'success' || needs['testflight-macos'].result == 'skipped')
     runs-on: ubuntu-latest
     # Hard ceiling. The retry loop below already bounds the wait (~90 min of polling), but a
     # job-level cap guarantees a wedged pilot process can never run to GitHub's 6 h limit —
     # cheap here (1× Ubuntu), but the discipline the signing jobs also follow.
     timeout-minutes: 105
     env:
-      RELEASE_NOTES: ${{ github.event.release.body }}
+      # release: notes/version/build come from the tagged release and the signing jobs' own
+      # outputs. workflow_dispatch: they come straight from the manual inputs — this is the
+      # path that targets a build the signing jobs in THIS run never uploaded (e.g. one
+      # stranded by a past failure, or one from an ordinary internal push build).
+      RELEASE_NOTES: ${{ github.event_name == 'release' && github.event.release.body || github.event.inputs.release_notes }}
       EXTERNAL_GROUPS: ${{ vars.TESTFLIGHT_EXTERNAL_GROUPS || 'Beta' }}
-      MARKETING: ${{ needs.testflight.outputs.marketing }}
-      BUILD: ${{ needs.testflight.outputs.build }}
+      MARKETING: ${{ github.event_name == 'release' && needs.testflight.outputs.marketing || github.event.inputs.app_version }}
+      BUILD: ${{ github.event_name == 'release' && needs.testflight.outputs.build || github.event.inputs.build_number }}
+      # A release always distributes both platforms; workflow_dispatch distributes only the
+      # platform the caller asked for (or 'both').
+      PLATFORMS: ${{ github.event_name == 'release' && 'ios osx' || (github.event.inputs.platform == 'both' && 'ios osx' || github.event.inputs.platform) }}
     steps:
       - uses: ruby/setup-ruby@v1
         with:
@@ -535,10 +585,14 @@ jobs:
             '{key_id: $kid, issuer_id: $iss, key: $key, duration: 1200, in_house: false}' \
             > api_key.json
 
-      - name: Distribute both platforms to external testers
+      - name: Distribute to external testers
         run: |
           if [ -z "$RELEASE_NOTES" ]; then
-            echo "::error::Release body is empty — external distribution requires 'What to Test' text"
+            echo "::error::Release notes are empty — external distribution requires 'What to Test' text"
+            exit 1
+          fi
+          if [ -z "$MARKETING" ] || [ -z "$BUILD" ]; then
+            echo "::error::app_version/build_number are empty — check the workflow_dispatch inputs"
             exit 1
           fi
           # distribute_only: no ipa/pkg, just point pilot at the already-uploaded build by
@@ -561,7 +615,7 @@ jobs:
           # slower than iOS (a v0.5.0 macOS build took over an hour). This is why the wait was
           # worth moving off the 10× runner: on 1× Ubuntu, idling ~90 min is cheap. The job
           # timeout-minutes above is the hard backstop if pilot wedges instead of failing.
-          for platform in ios osx; do
+          for platform in $PLATFORMS; do
             n=0
             until distribute "$platform"; do
               n=$((n + 1))
